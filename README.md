@@ -13,6 +13,7 @@ Works on single-node and multi-node databases (tested: one node on aarch64,
 | Function / procedure        | Purpose |
 |-----------------------------|---------|
 | `vgraph.gkhop`              | k-hop neighbourhood (BFS) |
+| `vgraph.gkhop_count`        | the same search, returns only the number of nodes per hop count |
 | `vgraph.gpath`              | shortest path, by hops or by weight |
 | `vgraph.gcomponents`        | connected components |
 | `vgraph.gpagerank`          | PageRank |
@@ -75,9 +76,16 @@ only inserted.
 - The delete flag may be a BOOLEAN (recommended: 1 byte) or an INT with +1 /
   -1. Without a delete column all rows are adds.
 - The version column is set by the database when the row is written. Let the
-  default do it and never set it in the application. It is not a business
-  date: a row that is written today with a date of last year cannot be
-  recognised as new by any mechanism.
+  default do it and never list the column in an INSERT or COPY. It is not a
+  business date. If your edges have a business date, keep it in a column of
+  its own next to the version:
+
+      valid_from DATE,                                       -- yours
+      ts TIMESTAMPTZ NOT NULL DEFAULT CLOCK_TIMESTAMP()      -- the version
+
+  A row written today with `valid_from = '2020-01-01'` still gets today's
+  version and is seen as new. Vertica cannot stop a writer from setting `ts`
+  itself; `vgraph.status` warns when it finds versions in the future.
 - Use `DEFAULT CLOCK_TIMESTAMP()`:
 
   | Default | Value | Effect |
@@ -88,7 +96,13 @@ only inserted.
 
   `TIMESTAMPTZ` is an absolute instant. A plain `TIMESTAMP` is the local time
   of the writing session, so it only works if all writers and the refresh use
-  the same session time zone. An increasing INT also works (see margin below).
+  the same session time zone.
+- An INT version (a sequence or an IDENTITY column) is accepted, but it is the
+  second choice. Vertica hands every session its own block of 250,000 sequence
+  numbers, so numbers do not follow the order of writing: three rows written
+  one after the other by two sessions got 250001, 500001, 250002. "Last row
+  wins" is then wrong across sessions. It is safe with one writer session, or
+  with `CACHE 1`, which is slow for bulk loads. See margin below as well.
 - Vertica's `epoch` pseudo-column is not used: it is not unique and can change.
 - A physical `DELETE` or `UPDATE` is allowed, but queries see it only after
   the next refresh.
@@ -194,7 +208,16 @@ All query functions take the eight columns of the delta view:
 ### Large results
 
 A deep k-hop returns millions of rows, and most of the query time is spent
-moving them. Keep them in the database and join there:
+moving them. If you need numbers and not the nodes, ask for the counts:
+
+    SELECT vgraph.gkhop_count(start, target, src, dst, del, weight, ver, snapshot_id
+                              USING PARAMETERS graph='contacts', start=12345, depth=9) OVER()
+    FROM app.contacts_delta;        -- (start, hops, nodes): one row per hop count
+
+It takes the same parameters as `gkhop`. On the 100 million row test it
+answers in 0.25 s where `gkhop` needs 0.95 s to return 5.8 million rows.
+
+If you need the nodes, keep them in the database and join there:
 
     CREATE LOCAL TEMPORARY TABLE reached ON COMMIT PRESERVE ROWS AS
     SELECT vgraph.gkhop(start, target, src, dst, del, weight, ver, snapshot_id
@@ -212,6 +235,16 @@ Without the `graph` parameter a query function builds the graph from the edge
 rows of its input. This needs no snapshot, but reads the whole table on every
 call. It is meant for tests and small tables.
 
+## Why not WITH RECURSIVE
+
+Vertica unrolls a recursive WITH into a fixed number of levels: the
+configuration parameter `WithClauseRecursionLimit`, 8 by default. Deeper levels
+are dropped without an error or warning: a recursive query that should count to
+50 returns 9 as its deepest level. A recursive query also follows every path,
+not every node, which explodes on a graph with cycles. The SQL reference used
+in the tests and measurements below is therefore a stored procedure that runs
+one INSERT per level.
+
 ## Measurements
 
 100 million edge rows (16.7 million people, each contact stored in both
@@ -225,22 +258,24 @@ Environment A: one node, aarch64, 8 cores, 15 GB RAM, Vertica 26.2.0-1.
 Environment B: 3-node Eon cluster, x86_64, 2 cores and 15 GB RAM per node
 (a small and busy machine, swapping during the test), Vertica 26.2.0-2.
 
-| Step                                             | A fenced | A unfenced | B fenced | B unfenced |
+| Step, 100 million rows                           | A fenced | A unfenced | B fenced | B unfenced |
 |--------------------------------------------------|---------:|-----------:|---------:|-----------:|
-| build the snapshot (once per refresh)            | 38.5 s   | 32.7 s     | 129.3 s  | not run    |
-| load it on all nodes                             | 2.9 s    | 3.0 s      | 10.8 s   | not run    |
-| gkhop depth 9                                    | 0.93 s   | 0.74 s     | 2.03 s   | 1.29 s     |
-| gkhop depth 2 (about 40 people)                  | 6 ms     | 3 ms       | 10 ms    | 9 ms       |
-| SQL BFS procedure of the demo repository, 9 hops | 2.45 s   |            | 5.56 s   |            |
+| gbuild into `vgraph.snapshot`                    | 19.1 s   | 16.3 s     | 80.9 s   | not run    |
+| gload on all nodes                               | 1.8 s    | 1.4 s      | 5.1 s    | not run    |
+| gkhop_count depth 9                              | 0.25 s   | 0.24 s     | 0.48 s   | not run    |
+| gkhop depth 9, all nodes returned                | 0.95 s   | 0.78 s     | 1.63 s   | not run    |
+| gkhop depth 2 (about 50 people)                  | 5 ms     | 2 ms       | 22 ms    | not run    |
+| SQL BFS procedure of the demo repository, 9 hops | 2.51 s   |            | 4.87 s   |            |
 
-gkhop and the SQL procedure return the same people in every run. The traversal
-itself takes about 0.15 s in environment A; the rest is returning 5 million rows.
-The build times were measured before the build input was reduced from four
-columns to two; they have not been measured again yet. A complete
-`refresh_graph` of the 100 million row journal (consolidation with 2383
-journaled deletes, build, load, view) took 63.7 s in environment A, fenced.
-Through the delta view, with 1000 pending changes: gkhop depth 2 takes 14 ms,
-depth 9 takes 1.36 s.
+All methods return the same people in every run (5.8 million in A, 4.0 million
+in B; the data is random per run). B's gkhop depth 9 was measured before the
+last improvement of the row writer. The snapshot file is 667 MB
+(the table stores both directions, so no reverse index is kept). A complete
+`refresh_graph` of a journal of that size, with 2383 journaled deletes to
+consolidate, took 63.7 s in environment A, fenced. Through the delta view with
+1000 pending changes, gkhop depth 2 takes 14 ms and depth 9 takes 1.4 s.
+For large results use a real one-row table or the delta view as input; `FROM
+dual` costs about 0.2 s more for 5.8 million rows.
 
 Memory: queries map the snapshot file read-only. All concurrent queries share
 one copy in the operating system's page cache, and the file may be larger than

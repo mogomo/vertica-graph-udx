@@ -189,6 +189,26 @@ void GraphBuilder::finish(std::int64_t max_ver, SnapshotBuffer &out)
         }
     }
 
+    // A directed table that stores both directions of every edge: the reverse CSR equals the
+    // forward one. Found by comparing them, then the file is compacted in place.
+    if (directed_ && e > 0) {
+        const bool same = std::memcmp(base + h.off_in_offsets, base + h.off_out_offsets, (n + 1) * 8) == 0 &&
+                          std::memcmp(base + h.off_in_nbrs, base + h.off_out_nbrs, e * 4) == 0 &&
+                          (!weighted_ || std::memcmp(base + h.off_in_weights, base + h.off_out_weights, e * 4) == 0);
+        if (same) {
+            SnapshotHeader small = h;
+            small.flags |= FLAG_IN_EQUALS_OUT;
+            snapshot_layout(small);
+            if (weighted_) std::memmove(base + small.off_out_weights, base + h.off_out_weights, e * 4);
+            // Bytes between the end of the moved data and the new end are alignment padding: keep them 0.
+            const std::uint64_t used = weighted_ ? small.off_out_weights + e * 4 : small.off_out_nbrs + e * 4;
+            std::memset(base + used, 0, small.total_bytes - used);
+            h = small;
+            out.shrink(h.total_bytes);
+            base = out.data();
+        }
+    }
+
     h.checksum = 0;
     std::memcpy(base, &h, sizeof(h));
     h.checksum = snapshot_checksum(base, h.total_bytes);

@@ -1,7 +1,12 @@
-// gkhop: k-hop neighbourhood of each request row. Output (start, node, hops).
+// gkhop:       k-hop neighbourhood of each request row. Output (start, node, hops).
+// gkhop_count: same search, but only the number of nodes per hop count.
+//              Output (start, hops, nodes). A deep search finds millions of nodes;
+//              returning them costs more than finding them.
 // Thin adapter around src/engine/bfs.h. Input handling is in udx_common.h.
 #include "udx_common.h"
 #include "../engine/bfs.h"
+
+#include <vector>
 
 using namespace Vertica;
 using namespace vgraph_udx;
@@ -10,7 +15,9 @@ static const char *const FN = "gkhop";
 
 class GKhop : public TransformFunction
 {
+protected:
     vgraph::KhopOptions opt_;
+    bool count_only_ = false;
 
     virtual void setup(ServerInterface &srvInterface, const SizedColumnTypes &argTypes)
     {
@@ -25,6 +32,80 @@ class GKhop : public TransformFunction
         if (params.containsParameter("max_results")) {
             opt_.max_results = params.getIntRef("max_results");
             if (opt_.max_results < 0) vt_report_error(0, "%s: max_results must be 0 or more", FN);
+        }
+    }
+
+    // One row per node found. Kept small and separate from count_rows: this loop writes millions
+    // of rows, and the compiler must be able to inline the row writer into the search.
+    template <class G>
+    void node_rows(const G &graph, const std::vector<Request> &requests, PartitionWriter &outputWriter)
+    {
+        static const size_t BATCH = 4096;
+        vgraph::BfsScratch scratch;
+        std::vector<vgraph::pos_t> batch;
+        batch.reserve(BATCH);
+        for (const Request &r : requests) {
+            const vint start = r.start;
+            vgraph::pos_t start_pos;
+            if (!graph.find(start, start_pos)) {
+                // Unknown node: it has no edges, so it only reaches itself.
+                if (!opt_.exact || opt_.depth == 0) {
+                    outputWriter.setInt(0, start);
+                    outputWriter.setInt(1, start);
+                    outputWriter.setInt(2, 0);
+                    outputWriter.next();
+                }
+                continue;
+            }
+            // The search fills a small batch; the rows are written in a tight loop of their own.
+            batch.clear();
+            std::int64_t batch_hops = 0;
+            auto flush = [&]() {
+                for (vgraph::pos_t p : batch) {
+                    outputWriter.setInt(0, start);
+                    outputWriter.setInt(1, graph.id_of(p));
+                    outputWriter.setInt(2, batch_hops);
+                    outputWriter.next();
+                }
+                batch.clear();
+            };
+            vgraph::khop(graph, start_pos, opt_, scratch, [&](vgraph::pos_t p, std::int64_t hops) {
+                if (hops != batch_hops || batch.size() == BATCH) {
+                    flush();
+                    batch_hops = hops;
+                }
+                batch.push_back(p);
+            });
+            flush();
+            if (isCanceled()) return;
+        }
+    }
+
+    // One row per hop count.
+    template <class G>
+    void count_rows(const G &graph, const std::vector<Request> &requests, PartitionWriter &outputWriter)
+    {
+        vgraph::BfsScratch scratch;
+        std::vector<vint> per_hop;
+        for (const Request &r : requests) {
+            vgraph::pos_t start_pos;
+            per_hop.assign(1, 0);
+            if (!graph.find(r.start, start_pos)) {
+                if (!opt_.exact || opt_.depth == 0) per_hop[0] = 1;     // an unknown node reaches itself
+            } else {
+                vgraph::khop(graph, start_pos, opt_, scratch, [&](vgraph::pos_t, std::int64_t hops) {
+                    if ((size_t)hops >= per_hop.size()) per_hop.resize(hops + 1, 0);
+                    ++per_hop[hops];
+                });
+            }
+            for (size_t h = 0; h < per_hop.size(); ++h) {
+                if (per_hop[h] == 0) continue;
+                outputWriter.setInt(0, r.start);
+                outputWriter.setInt(1, (vint)h);
+                outputWriter.setInt(2, per_hop[h]);
+                outputWriter.next();
+            }
+            if (isCanceled()) return;
         }
     }
 
@@ -44,37 +125,23 @@ class GKhop : public TransformFunction
             if (q.requests.empty())
                 vt_report_error(0, "%s: no start node: add a request row or the start parameter", FN);
 
-            q.run([&](const auto &graph) {
-                vgraph::BfsScratch scratch;
-                for (const Request &r : q.requests) {
-                    vgraph::pos_t start_pos;
-                    if (!graph.find(r.start, start_pos)) {
-                        // Unknown node: it has no edges, so it only reaches itself.
-                        if (!opt_.exact || opt_.depth == 0) {
-                            outputWriter.setInt(0, r.start);
-                            outputWriter.setInt(1, r.start);
-                            outputWriter.setInt(2, 0);
-                            outputWriter.next();
-                        }
-                        continue;
-                    }
-                    vgraph::khop(graph, start_pos, opt_, scratch, [&](vgraph::pos_t p, std::int64_t hops) {
-                        outputWriter.setInt(0, r.start);
-                        outputWriter.setInt(1, graph.id_of(p));
-                        outputWriter.setInt(2, hops);
-                        outputWriter.next();
-                    });
-                    if (isCanceled()) return;
-                }
-            });
+            if (count_only_) q.run([&](const auto &graph) { count_rows(graph, q.requests, outputWriter); });
+            else             q.run([&](const auto &graph) { node_rows(graph, q.requests, outputWriter); });
         } catch (std::exception &e) {
             vt_report_error(0, "%s: %s", FN, e.what());
         }
     }
 };
 
+class GKhopCount : public GKhop
+{
+public:
+    GKhopCount() { count_only_ = true; }
+};
+
 class GKhopFactory : public TransformFunctionFactory
 {
+protected:
     virtual void getPrototype(ServerInterface &srvInterface, ColumnTypes &argTypes, ColumnTypes &returnType)
     {
         add_query_input(argTypes);
@@ -105,4 +172,19 @@ class GKhopFactory : public TransformFunctionFactory
     { return vt_createFuncObject<GKhop>(srvInterface.allocator); }
 };
 
+class GKhopCountFactory : public GKhopFactory
+{
+    virtual void getReturnType(ServerInterface &srvInterface, const SizedColumnTypes &inputTypes,
+                               SizedColumnTypes &outputTypes)
+    {
+        outputTypes.addInt("start");
+        outputTypes.addInt("hops");
+        outputTypes.addInt("nodes");
+    }
+
+    virtual TransformFunction *createTransformFunction(ServerInterface &srvInterface)
+    { return vt_createFuncObject<GKhopCount>(srvInterface.allocator); }
+};
+
 RegisterFactory(GKhopFactory);
+RegisterFactory(GKhopCountFactory);

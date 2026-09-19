@@ -18,7 +18,8 @@ struct Csr {
     std::uint64_t node_count = 0;
     std::uint64_t edge_count = 0;
     std::int64_t max_ver = 0;
-    bool directed = true;           // false: graph is symmetric, in_* point to out_*
+    bool directed = true;           // false: one row per undirected edge; a delta row changes both directions
+    bool in_is_out = false;         // in lists equal out lists and are not stored: in_* point to out_*
     bool weighted = false;
     const std::int64_t *ids = nullptr;          // [N] sorted node ids
     const std::int64_t *out_offsets = nullptr;  // [N+1]
@@ -55,8 +56,8 @@ public:
     }
     template <class F> void for_dir(pos_t p, Direction d, F &&f) const {
         if (d != Direction::In) for_out(p, f);
-        // On a symmetric graph the in list equals the out list.
-        if (d == Direction::In || (d == Direction::Both && c_.directed)) for_in(p, f);
+        // If the in list equals the out list, one pass covers both directions.
+        if (d == Direction::In || (d == Direction::Both && !c_.in_is_out)) for_in(p, f);
     }
 
     std::int64_t out_degree(pos_t p) const { return c_.out_offsets[p + 1] - c_.out_offsets[p]; }

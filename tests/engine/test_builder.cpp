@@ -60,6 +60,20 @@ int main()
         g.for_in(t.pos(2), [&](pos_t, float x) { w.push_back(x); });
         CHECK(w == std::vector<float>({1.5f}));
     }
+    {   // directed input that stores both directions: no reverse CSR, same answers
+        TestGraph sym, asym;
+        build(sym, {{1, 2}, {2, 1}, {2, 3}, {3, 2}, {4, 4}});
+        build(asym, {{1, 2}, {2, 1}, {2, 3}, {3, 2}, {4, 4}, {3, 1}});
+        CHECK(sym.csr.directed && sym.csr.in_is_out && sym.csr.in_nbrs == sym.csr.out_nbrs);
+        CHECK(asym.csr.directed && !asym.csr.in_is_out && asym.csr.in_nbrs != asym.csr.out_nbrs);
+        CHECK(sym.buffer.size() < asym.buffer.size());
+        CHECK(in_ids(sym, 2) == Ids({1, 3}) && out_ids(sym, 2) == Ids({1, 3}));
+        TestGraph wsym, wasym;
+        build(wsym, {{1, 2, 2.0f}, {2, 1, 2.0f}}, true, true);
+        build(wasym, {{1, 2, 2.0f}, {2, 1, 3.0f}}, true, true);      // same edges, different weights
+        CHECK(wsym.csr.in_is_out && wsym.csr.out_weights[0] == 2.0f && wsym.csr.in_weights == wsym.csr.out_weights);
+        CHECK(!wasym.csr.in_is_out);
+    }
     {   // weights switched on after the first edges
         GraphBuilder b(true, false);
         b.add_edge(1, 2);

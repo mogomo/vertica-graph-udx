@@ -156,6 +156,18 @@ FROM (SELECT vgraph.gkhop(start, target, src, dst, del, weight, ver, snapshot_id
       FROM ${G}_delta) r;"
 compare "exact after the re-add and the second delete"
 expect "status reports the delta" "journal rows in the delta" "CALL vgraph.status('$G');"
+expect "gkhop_count equals the per-level counts of gkhop, through the delta" "^levels compared: [1-9][0-9]*, different: 0$" "
+SELECT 'levels compared: ' || COUNT(*) || ', different: ' || SUM((COALESCE(a.nodes, -1) <> COALESCE(b.nodes, -2))::INT)
+FROM (SELECT hops, nodes FROM (SELECT vgraph.gkhop_count(start, target, src, dst, del, weight, ver, snapshot_id
+             USING PARAMETERS graph='$G', depth=9, start=1) OVER() FROM $SCHEMA.${G}_delta) c) a
+FULL OUTER JOIN
+     (SELECT hops, COUNT(*) AS nodes FROM (SELECT vgraph.gkhop(start, target, src, dst, del, weight, ver, snapshot_id
+             USING PARAMETERS graph='$G', depth=9, start=1) OVER() FROM $SCHEMA.${G}_delta) k GROUP BY hops) b
+ON a.hops = b.hops;"
+expect "status warns about a version in the future (a writer that sets the version itself)" "have a version in the future" "
+INSERT INTO $SCHEMA.journal (src, dst, ts) VALUES (424242, 424243, CLOCK_TIMESTAMP() + INTERVAL '3 days'); COMMIT;
+CALL vgraph.status('$G');
+DELETE FROM $SCHEMA.journal WHERE src = 424242 AND dst = 424243; COMMIT;"
 
 echo "== second refresh"
 expect "refresh_graph again" "graph $G refreshed: snapshot [0-9]" "CALL vgraph.refresh_graph('$G');"

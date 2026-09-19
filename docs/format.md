@@ -22,7 +22,7 @@ It has no Vertica dependency.
 |-------:|-----------|-------------------|---------|
 | 0      | char[8]   | magic             | `VGRAPHS1` |
 | 8      | uint32    | format_version    | 1 |
-| 12     | uint32    | flags             | bit 0 directed, bit 1 weighted |
+| 12     | uint32    | flags             | bit 0 directed, bit 1 weighted, bit 2 in lists equal out lists |
 | 16     | uint64    | node_count        | N |
 | 24     | uint64    | edge_count        | E, stored directed edges, duplicates removed |
 | 32     | int64     | max_ver           | highest journal version at build time (microseconds for a timestamp column); informational |
@@ -31,10 +31,10 @@ It has no Vertica dependency.
 | 56     | uint64    | off_ids           | section offsets from the start of the file |
 | 64     | uint64    | off_out_offsets   | |
 | 72     | uint64    | off_out_nbrs      | |
-| 80     | uint64    | off_in_offsets    | 0 if not directed |
-| 88     | uint64    | off_in_nbrs       | 0 if not directed |
+| 80     | uint64    | off_in_offsets    | 0 if no reverse CSR is stored |
+| 88     | uint64    | off_in_nbrs       | 0 if no reverse CSR is stored |
 | 96     | uint64    | off_out_weights   | 0 if not weighted |
-| 104    | uint64    | off_in_weights    | 0 if not weighted or not directed |
+| 104    | uint64    | off_in_weights    | 0 if not weighted or no reverse CSR is stored |
 | 112    | uint64[2] | reserved          | 0 |
 
 ## Sections, in this order
@@ -52,8 +52,18 @@ It has no Vertica dependency.
 Section offsets are fully determined by N, E and the flags. A reader computes
 them again and rejects a file whose header says something else.
 
-`directed` flag off means the graph is symmetric: the builder added the reverse
-of every edge, so the in lists equal the out lists and are not stored.
+The reverse CSR (in_offsets, in_nbrs, in_weights) is stored only when bit 0 is
+set and bit 2 is not. "directed" in the tables above means exactly that.
+
+- Bit 0 off: one input row per undirected edge. The builder added the reverse
+  of every edge, so the in lists equal the out lists.
+- Bit 0 and bit 2 on: every row is a directed edge, but the table stores both
+  directions of every edge (with equal weights), so the in lists equal the out
+  lists as well. The builder finds this by comparing the two and leaves the
+  reverse CSR out. The demo graph shrinks from 1.2 GB to 0.8 GB.
+
+The difference between the two matters for changes after the snapshot: with bit
+0 off a journal row changes both directions, with bit 0 on it changes one.
 
 Self loops are kept. An edge that is given twice is stored once; with weights
 the first one wins.

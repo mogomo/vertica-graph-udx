@@ -12,7 +12,7 @@ static std::uint64_t align8(std::uint64_t v) { return (v + 7) & ~std::uint64_t(7
 void snapshot_layout(SnapshotHeader &h)
 {
     const std::uint64_t n = h.node_count, e = h.edge_count;
-    const bool directed = (h.flags & FLAG_DIRECTED) != 0;
+    const bool directed = (h.flags & FLAG_DIRECTED) != 0 && (h.flags & FLAG_IN_EQUALS_OUT) == 0;   // reverse CSR stored
     const bool weighted = (h.flags & FLAG_WEIGHTED) != 0;
 
     std::uint64_t at = sizeof(SnapshotHeader);
@@ -79,10 +79,11 @@ Csr snapshot_open(const std::uint8_t *data, std::uint64_t size, bool verify_chec
     c.max_ver = h.max_ver;
     c.directed = (h.flags & FLAG_DIRECTED) != 0;
     c.weighted = (h.flags & FLAG_WEIGHTED) != 0;
+    c.in_is_out = !c.directed || (h.flags & FLAG_IN_EQUALS_OUT) != 0;
     c.ids = reinterpret_cast<const std::int64_t *>(data + h.off_ids);
     c.out_offsets = reinterpret_cast<const std::int64_t *>(data + h.off_out_offsets);
     c.out_nbrs = reinterpret_cast<const pos_t *>(data + h.off_out_nbrs);
-    if (c.directed) {
+    if (!c.in_is_out) {
         c.in_offsets = reinterpret_cast<const std::int64_t *>(data + h.off_in_offsets);
         c.in_nbrs = reinterpret_cast<const pos_t *>(data + h.off_in_nbrs);
     } else {
@@ -91,7 +92,7 @@ Csr snapshot_open(const std::uint8_t *data, std::uint64_t size, bool verify_chec
     }
     if (c.weighted) {
         c.out_weights = reinterpret_cast<const float *>(data + h.off_out_weights);
-        c.in_weights = c.directed ? reinterpret_cast<const float *>(data + h.off_in_weights) : c.out_weights;
+        c.in_weights = c.in_is_out ? c.out_weights : reinterpret_cast<const float *>(data + h.off_in_weights);
     }
 
     // Cheap structural checks, so a damaged file cannot send a query out of bounds.

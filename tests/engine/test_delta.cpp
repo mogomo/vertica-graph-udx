@@ -86,6 +86,20 @@ static void hand_made()
         CHECK(shortest_path(g, p5, p7, PathOptions(), ps, path) && path.size() == 3 && path[1] == p100);
         CHECK(!shortest_path(g, p1, p7, PathOptions(), ps, path));
     }
+    {   // directed snapshot that stores both directions (no reverse CSR): journal rows stay directed
+        TestGraph s;
+        build(s, {{1, 2}, {2, 1}, {2, 3}, {3, 2}});
+        CHECK(s.csr.in_is_out);
+        Overlay g(s.csr);
+        g.apply(2, 3, -1);                                   // only 2 -> 3 goes, 3 -> 2 stays
+        CHECK(nbrs(g, 2, true) == Ids({1}) && nbrs(g, 3, true) == Ids({2}));
+        CHECK(nbrs(g, 3, false).empty() && nbrs(g, 2, false) == Ids({1, 3}));
+        CHECK(hops(g, 1, 9, Direction::Out) == HopMap({{1, 0}, {2, 1}}));
+        CHECK(hops(g, 3, 9, Direction::Out) == HopMap({{3, 0}, {2, 1}, {1, 2}}));
+        CHECK(hops(g, 1, 9, Direction::In) == HopMap({{1, 0}, {2, 1}, {3, 2}}));
+        g.apply(3, 9, 1);
+        CHECK(nbrs(g, 9, false) == Ids({3}) && nbrs(g, 9, true).empty());
+    }
     {   // undirected snapshot: one journal row changes both directions
         TestGraph u;
         build(u, {{1, 2}, {2, 3}}, false);
@@ -113,7 +127,7 @@ static void hand_made()
     }
 }
 
-static void randomised(std::uint64_t seed, bool directed)
+static void randomised(std::uint64_t seed, bool directed, bool mirrored_base = false)
 {
     Rng rng(seed);
     const std::int64_t nodes = 120;
@@ -129,9 +143,11 @@ static void randomised(std::uint64_t seed, bool directed)
         const std::int64_t s = id(), d = id();
         base.push_back(Edge(s, d));
         live.insert(norm(s, d));
+        if (mirrored_base) { base.push_back(Edge(d, s)); live.insert(norm(d, s)); }
     }
     TestGraph t;
     build(t, base, directed);
+    CHECK(!mirrored_base || t.csr.in_is_out);
     Overlay g(t.csr);
 
     std::vector<std::pair<std::pair<std::int64_t, std::int64_t>, int>> journal;
@@ -179,5 +195,6 @@ int main()
     randomised(11, true);
     randomised(12, false);
     randomised(13, true);
+    randomised(14, true, true);      // directed base that stores both directions
     return finish("test_delta");
 }

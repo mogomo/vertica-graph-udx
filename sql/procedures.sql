@@ -164,7 +164,7 @@ $$;
 -- How many journal rows a query has to apply now, and how long it takes to read them.
 CREATE OR REPLACE PROCEDURE vgraph.status(g VARCHAR) LANGUAGE PLvSQL AS $$
 DECLARE
-    tab VARCHAR(256); n INT; t0 TIMESTAMPTZ; ms INT;
+    tab VARCHAR(256); ver VARCHAR(128); n INT; t0 TIMESTAMPTZ; ms INT;
 BEGIN
     tab := (SELECT edge_table FROM vgraph.manifest WHERE graph = g);
     IF tab IS NULL THEN
@@ -186,6 +186,16 @@ BEGIN
     END IF;
     IF n > 1000000 THEN
         RAISE WARNING 'vgraph: graph %: the delta holds % rows. Refresh more often.', g, n;
+    END IF;
+    -- A version that lies in the future was not set by the database clock: some writer fills the
+    -- version column itself. (A version set too far in the past cannot be recognised afterwards.)
+    ver := (SELECT ver_col FROM vgraph.manifest WHERE graph = g);
+    IF ver IS NOT NULL AND (SELECT data_type ILIKE 'timestamp%' FROM v_catalog.columns WHERE table_schema ILIKE SPLIT_PART(tab, '.', 1)
+                            AND table_name ILIKE SPLIT_PART(tab, '.', 2) AND column_name ILIKE ver) THEN
+        n := EXECUTE 'SELECT COUNT(*) FROM ' || tab || ' WHERE ' || ver || ' > CLOCK_TIMESTAMP() + INTERVAL ''5 minutes''';
+        IF n > 0 THEN
+            RAISE WARNING 'vgraph: graph %: % rows of % have a version in the future. The version column must be filled by its default (CLOCK_TIMESTAMP), never by the application; results can be wrong.', g, n, tab;
+        END IF;
     END IF;
 END;
 $$;

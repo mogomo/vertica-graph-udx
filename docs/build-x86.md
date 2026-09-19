@@ -94,7 +94,7 @@ At the end it prints the version and the mode of every function:
      function_name | is_fenced
     ---------------+-----------
      gbuild        | t
-     ...
+     ...            (one line per function)
 
 ## 6. Check the installation
 

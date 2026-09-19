@@ -17,8 +17,11 @@ namespace vgraph {
 
 constexpr char SNAPSHOT_MAGIC[8] = {'V', 'G', 'R', 'A', 'P', 'H', 'S', '1'};
 
-constexpr std::uint32_t FLAG_DIRECTED = 1u;  // reverse CSR is stored
-constexpr std::uint32_t FLAG_WEIGHTED = 2u;  // weight sections are stored
+constexpr std::uint32_t FLAG_DIRECTED = 1u;      // every stored row is one directed edge
+constexpr std::uint32_t FLAG_WEIGHTED = 2u;      // weight sections are stored
+constexpr std::uint32_t FLAG_IN_EQUALS_OUT = 4u; // directed, but the in lists equal the out lists
+                                                 // (the table stores both directions): no reverse CSR
+// The reverse CSR is stored only if FLAG_DIRECTED is set and FLAG_IN_EQUALS_OUT is not.
 
 // 128 bytes. Section offsets are from the start of the file; 0 = section absent.
 struct SnapshotHeader {
@@ -45,6 +48,7 @@ static_assert(sizeof(SnapshotHeader) == 128, "snapshot header must be 128 bytes"
 class SnapshotBuffer {
 public:
     void allocate(std::uint64_t bytes) { words_.assign(bytes / 8, 0); }
+    void shrink(std::uint64_t bytes) { words_.resize(bytes / 8); }
     std::uint8_t *data() { return reinterpret_cast<std::uint8_t *>(words_.data()); }
     const std::uint8_t *data() const { return reinterpret_cast<const std::uint8_t *>(words_.data()); }
     std::uint64_t size() const { return words_.size() * 8; }

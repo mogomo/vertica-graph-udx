@@ -65,6 +65,9 @@ public:
 
     template <class F> void for_out(pos_t p, F &&f) const { walk(p, true, f); }
     template <class F> void for_in(pos_t p, F &&f) const { walk(p, c_.directed ? false : true, f); }
+    // Note: on a directed snapshot with in_is_out the base in arrays are the out arrays. walk(p, false)
+    // still reads them as "sources that point to p" and checks deletes as (source, p), which is right:
+    // in such a snapshot q is in the list of p exactly when q -> p exists.
     template <class F> void for_dir(pos_t p, Direction d, F &&f) const
     {
         if (d != Direction::In) for_out(p, f);
