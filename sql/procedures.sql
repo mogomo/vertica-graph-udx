@@ -22,7 +22,7 @@ DECLARE
     del_expr VARCHAR(400); w_expr VARCHAR(400); ver_expr VARCHAR(400);
     view_name VARCHAR(400); stmt VARCHAR(8000); sid_text VARCHAR(32);
 BEGIN
-    tab := (SELECT edge_table FROM vgraph.manifest WHERE graph = g);
+    tab := (SELECT MAX(edge_table) FROM vgraph.manifest WHERE graph = g);
     IF tab IS NULL THEN
         RAISE EXCEPTION 'vgraph.make_delta_view: graph % is not registered', g;
     END IF;
@@ -136,7 +136,7 @@ DECLARE
     want INT; got INT;
 BEGIN
     want := (SELECT COUNT(*) FROM (SELECT vgraph.gnode(k) OVER(PARTITION NODES) FROM vgraph.probe) n);
-    got := EXECUTE 'SELECT COUNT(DISTINCT node_name) FROM (SELECT vgraph.gload(byte_offset, chunk USING PARAMETERS graph='
+    got := EXECUTE 'SELECT /*+LABEL(vgraph_load)*/ COUNT(DISTINCT node_name) FROM (SELECT vgraph.gload(byte_offset, chunk USING PARAMETERS graph='
         || QUOTE_LITERAL(g) || ', snapshot_id=' || sid || ') OVER(PARTITION NODES) FROM (SELECT s.byte_offset, s.chunk '
         || 'FROM vgraph.snapshot s CROSS JOIN vgraph.probe p WHERE s.graph=' || QUOTE_LITERAL(g) || ' AND s.snapshot_id=' || sid
         || ' AND p.k IN (SELECT k FROM (SELECT vgraph.gnode(k) OVER(PARTITION NODES) FROM vgraph.probe) n)) c) l WHERE status = ''loaded''';
@@ -152,7 +152,7 @@ CREATE OR REPLACE PROCEDURE vgraph.load_all(g VARCHAR) LANGUAGE PLvSQL AS $$
 DECLARE
     sid INT;
 BEGIN
-    sid := (SELECT active_snapshot FROM vgraph.manifest WHERE graph = g);
+    sid := (SELECT MAX(active_snapshot) FROM vgraph.manifest WHERE graph = g);
     IF sid IS NULL THEN
         RAISE EXCEPTION 'vgraph.load_all: graph % is not registered or has no snapshot yet: run vgraph.refresh_graph', g;
     END IF;
@@ -166,7 +166,7 @@ CREATE OR REPLACE PROCEDURE vgraph.status(g VARCHAR) LANGUAGE PLvSQL AS $$
 DECLARE
     tab VARCHAR(256); ver VARCHAR(128); n INT; t0 TIMESTAMPTZ; ms INT;
 BEGIN
-    tab := (SELECT edge_table FROM vgraph.manifest WHERE graph = g);
+    tab := (SELECT MAX(edge_table) FROM vgraph.manifest WHERE graph = g);
     IF tab IS NULL THEN
         RAISE EXCEPTION 'vgraph.status: graph % is not registered', g;
     END IF;
@@ -211,7 +211,7 @@ DECLARE
     budget INT; est_rows INT; est_mb INT; how VARCHAR(16); t_map VARCHAR(200); t_edges VARCHAR(200);
     pair VARCHAR(200); stmt VARCHAR(8000); flags VARCHAR(1000); head VARCHAR(1000); n_nodes INT; n_edges INT; n INT; same BOOLEAN;
 BEGIN
-    tab := (SELECT edge_table FROM vgraph.manifest WHERE graph = g);
+    tab := (SELECT MAX(edge_table) FROM vgraph.manifest WHERE graph = g);
     IF tab IS NULL THEN
         RAISE EXCEPTION 'vgraph.refresh_graph: graph % is not registered', g;
     END IF;
@@ -319,7 +319,7 @@ BEGIN
     est_mb := (est_rows * 24) // 1000000;       -- 16 per edge row, and up to 32 per node at about 4 rows per node
     IF est_mb <= budget THEN
         how := 'memory';
-        EXECUTE 'INSERT INTO vgraph.snapshot SELECT ' || QUOTE_LITERAL(g) || ', ' || sid || ', byte_offset, chunk FROM (SELECT vgraph.gbuild(src, dst'
+        EXECUTE 'INSERT /*+LABEL(vgraph_build)*/ INTO vgraph.snapshot SELECT ' || QUOTE_LITERAL(g) || ', ' || sid || ', byte_offset, chunk FROM (SELECT vgraph.gbuild(src, dst'
              || CASE WHEN w IS NOT NULL THEN ', weight' ELSE '' END || ' USING PARAMETERS graph=' || QUOTE_LITERAL(g)
              || ', directed=' || CASE WHEN dir THEN 'true' ELSE 'false' END || ', max_ver=' || COALESCE(max_ver, 0)
              || ') OVER(ORDER BY src, dst) FROM (' || source || ') e) b';
@@ -331,9 +331,9 @@ BEGIN
         EXECUTE 'DROP TABLE IF EXISTS ' || t_map || ' CASCADE';
         EXECUTE 'DROP TABLE IF EXISTS ' || t_edges || ' CASCADE';
         -- a. consolidated edges, once
-        EXECUTE 'CREATE TABLE ' || t_edges || '_raw AS SELECT * FROM (' || source || ') e';
+        EXECUTE 'CREATE TABLE ' || t_edges || '_raw AS SELECT /*+LABEL(vgraph_build)*/ * FROM (' || source || ') e';
         -- b. node map: position = rank of the id
-        EXECUTE 'CREATE TABLE ' || t_map || ' AS SELECT id, ROW_NUMBER() OVER(ORDER BY id) - 1 AS pos FROM (SELECT src AS id FROM '
+        EXECUTE 'CREATE TABLE ' || t_map || ' AS SELECT /*+LABEL(vgraph_build)*/ id, ROW_NUMBER() OVER(ORDER BY id) - 1 AS pos FROM (SELECT src AS id FROM '
              || t_edges || '_raw UNION SELECT dst FROM ' || t_edges || '_raw) u ORDER BY id SEGMENTED BY HASH(id) ALL NODES';
         -- c. edges as positions, unique; both directions for an undirected graph
         pair := CASE WHEN w IS NOT NULL THEN ', MIN(e.weight) AS weight' ELSE '' END;
@@ -344,7 +344,7 @@ BEGIN
                  || CASE WHEN w IS NOT NULL THEN ', weight' ELSE '' END || ' FROM (' || stmt || ') f UNION ALL SELECT d, s'
                  || CASE WHEN w IS NOT NULL THEN ', weight' ELSE '' END || ' FROM (' || stmt || ') r WHERE s <> d) b GROUP BY 1, 2';
         END IF;
-        EXECUTE 'CREATE TABLE ' || t_edges || ' AS SELECT * FROM (' || stmt || ') m ORDER BY s, d SEGMENTED BY HASH(s) ALL NODES';
+        EXECUTE 'CREATE TABLE ' || t_edges || ' AS SELECT /*+LABEL(vgraph_build)*/ * FROM (' || stmt || ') m ORDER BY s, d SEGMENTED BY HASH(s) ALL NODES';
         EXECUTE 'DROP TABLE IF EXISTS ' || t_edges || '_raw CASCADE';
         n_nodes := EXECUTE 'SELECT COUNT(*) FROM ' || t_map;
         n_edges := EXECUTE 'SELECT COUNT(*) FROM ' || t_edges;
@@ -366,7 +366,7 @@ BEGIN
               || ', directed=' || CASE WHEN dir THEN 'true' ELSE 'false' END
               || ', weighted=' || CASE WHEN w IS NOT NULL THEN 'true' ELSE 'false' END
               || ', in_equals_out=' || CASE WHEN same THEN 'true' ELSE 'false' END || ', max_ver=' || COALESCE(max_ver, 0);
-        head := 'INSERT INTO vgraph.snapshot SELECT ' || QUOTE_LITERAL(g) || ', ' || sid || ', byte_offset, chunk FROM (SELECT vgraph.gbuild_mapped(';
+        head := 'INSERT /*+LABEL(vgraph_build)*/ INTO vgraph.snapshot SELECT ' || QUOTE_LITERAL(g) || ', ' || sid || ', byte_offset, chunk FROM (SELECT vgraph.gbuild_mapped(';
         EXECUTE head || 'a, b' || flags || ', section=''ids'') OVER(ORDER BY a, b) FROM (SELECT pos AS a, id AS b FROM ' || t_map || ') q) x';
         EXECUTE head || 'a, b' || flags || ', section=''out_offsets'') OVER(ORDER BY a, b) FROM (SELECT s AS a, COUNT(*) AS b FROM ' || t_edges || ' GROUP BY s) q) x';
         EXECUTE head || 'a, b' || flags || ', section=''out_nbrs'') OVER(ORDER BY a, b) FROM (SELECT s AS a, d AS b FROM ' || t_edges || ') q) x';
@@ -382,7 +382,7 @@ BEGIN
         END IF;
         PERFORM COMMIT;
         -- f. the header, from the checksum rows of the sections (byte_offset < 0)
-        EXECUTE 'INSERT INTO vgraph.snapshot SELECT ' || QUOTE_LITERAL(g) || ', ' || sid || ', byte_offset, chunk FROM (SELECT vgraph.gbuild_header(byte_offset, chunk'
+        EXECUTE 'INSERT /*+LABEL(vgraph_build)*/ INTO vgraph.snapshot SELECT ' || QUOTE_LITERAL(g) || ', ' || sid || ', byte_offset, chunk FROM (SELECT vgraph.gbuild_header(byte_offset, chunk'
              || flags || ') OVER() FROM vgraph.snapshot WHERE graph = ' || QUOTE_LITERAL(g) || ' AND snapshot_id = ' || sid || ' AND byte_offset < 0) h';
         PERFORM DELETE FROM vgraph.snapshot WHERE graph = g AND snapshot_id = sid AND byte_offset < 0;
         PERFORM COMMIT;
@@ -439,7 +439,7 @@ CREATE OR REPLACE PROCEDURE vgraph.unregister_graph(g VARCHAR) LANGUAGE PLvSQL A
 DECLARE
     tab VARCHAR(256);
 BEGIN
-    tab := (SELECT edge_table FROM vgraph.manifest WHERE graph = g);
+    tab := (SELECT MAX(edge_table) FROM vgraph.manifest WHERE graph = g);
     IF tab IS NULL THEN
         RAISE EXCEPTION 'vgraph.unregister_graph: graph % is not registered', g;
     END IF;
