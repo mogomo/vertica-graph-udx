@@ -1,5 +1,5 @@
 // gload: writes the snapshot cache file on every node and makes it active.
-//   vgraph.gload(chunk_no, chunk USING PARAMETERS graph='g', snapshot_id=7) OVER(PARTITION NODES)
+//   vgraph.gload(byte_offset, chunk USING PARAMETERS graph='g', snapshot_id=7) OVER(PARTITION NODES)
 // Output (node_name, snapshot_id, bytes, status). Idempotent: run it again any time.
 // Thin adapter around src/engine/cache.h.
 #include "udx_common.h"
@@ -27,9 +27,9 @@ class GLoad : public TransformFunction
             writer.begin(resolve_cache_dir(srvInterface), graph, snapshot_id);
             do {
                 if (inputReader.isNull(0) || inputReader.getStringRef(1).isNull())
-                    vt_report_error(0, "%s: graph '%s' on %s: NULL chunk_no or chunk", FN, graph.c_str(), node.c_str());
+                    vt_report_error(0, "%s: graph '%s' on %s: NULL byte_offset or chunk", FN, graph.c_str(), node.c_str());
                 const VString &chunk = inputReader.getStringRef(1);
-                writer.write_chunk(inputReader.getIntRef(0), chunk.data(), chunk.length());
+                writer.write_at(inputReader.getIntRef(0), chunk.data(), chunk.length());
                 if (isCanceled()) return;
             } while (inputReader.next());
             const std::uint64_t bytes = writer.commit();

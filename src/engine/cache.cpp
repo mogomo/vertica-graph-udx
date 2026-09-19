@@ -174,11 +174,11 @@ void CacheWriter::begin(const std::string &cache_dir, const std::string &graph, 
     if (fd_ < 0) fail("cannot create", tmp_path_);
 }
 
-void CacheWriter::write_chunk(std::int64_t chunk_no, const char *data, std::uint64_t len)
+void CacheWriter::write_at(std::int64_t byte_offset, const char *data, std::uint64_t len)
 {
-    if (chunk_no < 0 || len == 0 || len > CHUNK_BYTES)
-        throw std::runtime_error("bad chunk " + std::to_string(chunk_no) + " of " + std::to_string(len) + " bytes");
-    std::uint64_t offset = static_cast<std::uint64_t>(chunk_no) * CHUNK_BYTES;
+    if (byte_offset < 0 || len == 0 || len > CHUNK_BYTES)
+        throw std::runtime_error("bad piece at offset " + std::to_string(byte_offset) + " of " + std::to_string(len) + " bytes");
+    std::uint64_t offset = static_cast<std::uint64_t>(byte_offset);
     std::uint64_t left = len;
     while (left > 0) {
         const ssize_t n = pwrite(fd_, data, left, static_cast<off_t>(offset));
@@ -193,9 +193,10 @@ void CacheWriter::write_chunk(std::int64_t chunk_no, const char *data, std::uint
 
 std::uint64_t CacheWriter::commit()
 {
-    // Every byte written exactly once: no chunk missing, none twice.
+    // Every byte written exactly once: no piece missing, none twice. (The checksum below catches
+    // the rest: a hole reads as zeros, and zero words do not match the expected checksum.)
     if (bytes_written_ != end_offset_)
-        throw std::runtime_error("chunks are missing or duplicated: " + std::to_string(bytes_written_) +
+        throw std::runtime_error("pieces are missing or duplicated: " + std::to_string(bytes_written_) +
                                  " bytes received for a file of " + std::to_string(end_offset_));
     if (::fsync(fd_) != 0) fail("cannot sync", tmp_path_);
     {

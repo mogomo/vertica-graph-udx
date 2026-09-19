@@ -13,9 +13,9 @@ CREATE SCHEMA IF NOT EXISTS vgraph;
 CREATE TABLE IF NOT EXISTS vgraph.snapshot (
     graph        VARCHAR(64) NOT NULL,
     snapshot_id  INT NOT NULL,
-    chunk_no     INT NOT NULL,
+    byte_offset  INT NOT NULL,               -- where the piece goes in the snapshot file
     chunk        LONG VARBINARY(8388608) NOT NULL
-) ORDER BY graph, snapshot_id, chunk_no UNSEGMENTED ALL NODES;
+) ORDER BY graph, snapshot_id, byte_offset UNSEGMENTED ALL NODES;
 
 CREATE TABLE IF NOT EXISTS vgraph.manifest (
     graph             VARCHAR(64) NOT NULL PRIMARY KEY,
@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS vgraph.manifest (
     edge_count        INT,
     built_at          TIMESTAMPTZ,
     build_seconds     FLOAT,
-    format_version    INT
+    format_version    INT,
+    build_memory_mb   INT DEFAULT 4096        -- above this estimate refresh_graph uses the streaming build
 ) UNSEGMENTED ALL NODES;
 
 -- Snapshot ids. Never reused, so an old cache file can never pass as a newer snapshot.
@@ -63,6 +64,9 @@ CREATE ROLE vgraph_admin;
 CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gversion    AS LANGUAGE 'C++' NAME 'GVersionFactory'    LIBRARY vgraph :fenced;
 CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gbuild      AS LANGUAGE 'C++' NAME 'GBuildFactory'      LIBRARY vgraph :fenced;
 CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gbuild      AS LANGUAGE 'C++' NAME 'GBuildWeightedFactory' LIBRARY vgraph :fenced;
+CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gbuild_mapped AS LANGUAGE 'C++' NAME 'GBuildMappedFactory' LIBRARY vgraph :fenced;
+CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gbuild_mapped AS LANGUAGE 'C++' NAME 'GBuildMappedWeightedFactory' LIBRARY vgraph :fenced;
+CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gbuild_header AS LANGUAGE 'C++' NAME 'GBuildHeaderFactory' LIBRARY vgraph :fenced;
 CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gload       AS LANGUAGE 'C++' NAME 'GLoadFactory'       LIBRARY vgraph :fenced;
 CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gnode       AS LANGUAGE 'C++' NAME 'GNodeFactory'       LIBRARY vgraph :fenced;
 CREATE OR REPLACE TRANSFORM FUNCTION vgraph.ginfo       AS LANGUAGE 'C++' NAME 'GInfoFactory'       LIBRARY vgraph :fenced;
@@ -86,6 +90,9 @@ GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gpagerank(INT, INT, INT, INT, BOOLEAN
 GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gbuild(INT, INT) TO vgraph_admin;
 GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gbuild(INT, INT, FLOAT) TO vgraph_admin;
 GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gload(INT, LONG VARBINARY) TO vgraph_admin;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gbuild_mapped(INT, INT) TO vgraph_admin;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gbuild_mapped(INT, INT, FLOAT) TO vgraph_admin;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gbuild_header(INT, LONG VARBINARY) TO vgraph_admin;
 GRANT ALL ON vgraph.snapshot, vgraph.manifest TO vgraph_admin;
 GRANT SELECT ON SEQUENCE vgraph.snapshot_seq TO vgraph_admin;
 

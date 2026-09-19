@@ -23,7 +23,7 @@ static void load(const std::string &dir, const std::string &graph, std::int64_t 
     for (std::int64_t c = chunks - 1 - (drop_last_chunk ? 1 : 0); c >= 0; --c) {
         const std::uint64_t off = c * CHUNK_BYTES;
         const std::uint64_t len = std::min<std::uint64_t>(CHUNK_BYTES, b.size() - off);
-        w.write_chunk(c, reinterpret_cast<const char *>(b.data()) + off, len);
+        w.write_at(static_cast<std::int64_t>(off), reinterpret_cast<const char *>(b.data()) + off, len);
     }
     w.commit();
 }

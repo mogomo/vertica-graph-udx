@@ -62,6 +62,12 @@ void snapshot_layout(SnapshotHeader &h);
 // Checksum of a complete snapshot. The stored checksum field counts as 0.
 std::uint64_t snapshot_checksum(const std::uint8_t *data, std::uint64_t size);
 
+// The checksum is the XOR of one value per 8-byte word, mixed with the word's position in the file.
+// So the checksum of a file is the XOR of the checksums of its parts, in any order: sections that
+// are written by separate statements can be summed up afterwards. A zero word contributes nothing.
+// first_word = file offset of data / 8. size is a multiple of 8.
+std::uint64_t snapshot_checksum_part(const std::uint8_t *data, std::uint64_t size, std::uint64_t first_word);
+
 // Validates the bytes and returns a view on them. data must be 8-byte aligned
 // and must outlive the view. Throws std::runtime_error with the cause.
 // verify_checksum reads the whole file: use it in gload, not in every query.

@@ -136,8 +136,8 @@ DECLARE
     want INT; got INT;
 BEGIN
     want := (SELECT COUNT(*) FROM (SELECT vgraph.gnode(k) OVER(PARTITION NODES) FROM vgraph.probe) n);
-    got := EXECUTE 'SELECT COUNT(DISTINCT node_name) FROM (SELECT vgraph.gload(chunk_no, chunk USING PARAMETERS graph='
-        || QUOTE_LITERAL(g) || ', snapshot_id=' || sid || ') OVER(PARTITION NODES) FROM (SELECT s.chunk_no, s.chunk '
+    got := EXECUTE 'SELECT COUNT(DISTINCT node_name) FROM (SELECT vgraph.gload(byte_offset, chunk USING PARAMETERS graph='
+        || QUOTE_LITERAL(g) || ', snapshot_id=' || sid || ') OVER(PARTITION NODES) FROM (SELECT s.byte_offset, s.chunk '
         || 'FROM vgraph.snapshot s CROSS JOIN vgraph.probe p WHERE s.graph=' || QUOTE_LITERAL(g) || ' AND s.snapshot_id=' || sid
         || ' AND p.k IN (SELECT k FROM (SELECT vgraph.gnode(k) OVER(PARTITION NODES) FROM vgraph.probe) n)) c) l WHERE status = ''loaded''';
     IF got IS NULL OR got < want THEN
@@ -208,6 +208,8 @@ DECLARE
     prev INT; sid INT; chunks INT; max_ver INT; v_from VARCHAR(64);
     cols VARCHAR(1000); source VARCHAR(4000); del_expr VARCHAR(400); del_a VARCHAR(400); del_k VARCHAR(400);
     t0 TIMESTAMPTZ; cut TIMESTAMPTZ; secs FLOAT; nodes INT; edges INT; fmt INT;
+    budget INT; est_rows INT; est_mb INT; how VARCHAR(16); t_map VARCHAR(200); t_edges VARCHAR(200);
+    pair VARCHAR(200); stmt VARCHAR(8000); flags VARCHAR(1000); head VARCHAR(1000); n_nodes INT; n_edges INT; n INT; same BOOLEAN;
 BEGIN
     tab := (SELECT edge_table FROM vgraph.manifest WHERE graph = g);
     IF tab IS NULL THEN
@@ -304,10 +306,89 @@ BEGIN
     --    Snapshot ids come from a sequence: they never repeat, also not after unregister and register,
     --    so a cache file left behind by an older graph of the same name is always recognised as stale.
     sid := (SELECT NEXTVAL('vgraph.snapshot_seq'));
-    EXECUTE 'INSERT INTO vgraph.snapshot SELECT ' || QUOTE_LITERAL(g) || ', ' || sid || ', chunk_no, chunk FROM (SELECT vgraph.gbuild(src, dst'
-         || CASE WHEN w IS NOT NULL THEN ', weight' ELSE '' END || ' USING PARAMETERS graph=' || QUOTE_LITERAL(g)
-         || ', directed=' || CASE WHEN dir THEN 'true' ELSE 'false' END || ', max_ver=' || COALESCE(max_ver, 0) || ') OVER(ORDER BY src, dst) FROM (' || source || ') e) b';
-    PERFORM COMMIT;
+    --    Two ways to build, same bytes:
+    --    in memory (gbuild): fast, needs about 16 bytes per edge row plus 32 per node in the UDx process.
+    --    streaming (gbuild_mapped): Vertica builds the node map and the mapped, sorted edges in tables,
+    --    which spill to disk; the function needs one chunk of memory. Chosen when the estimate is
+    --    above vgraph.manifest.build_memory_mb (0 = always stream).
+    budget := (SELECT COALESCE(build_memory_mb, 4096) FROM vgraph.manifest WHERE graph = g);
+    est_rows := EXECUTE 'SELECT COUNT(*) FROM ' || tab;
+    IF NOT dir THEN
+        est_rows := est_rows * 2;
+    END IF;
+    est_mb := (est_rows * 24) // 1000000;       -- 16 per edge row, and up to 32 per node at about 4 rows per node
+    IF est_mb <= budget THEN
+        how := 'memory';
+        EXECUTE 'INSERT INTO vgraph.snapshot SELECT ' || QUOTE_LITERAL(g) || ', ' || sid || ', byte_offset, chunk FROM (SELECT vgraph.gbuild(src, dst'
+             || CASE WHEN w IS NOT NULL THEN ', weight' ELSE '' END || ' USING PARAMETERS graph=' || QUOTE_LITERAL(g)
+             || ', directed=' || CASE WHEN dir THEN 'true' ELSE 'false' END || ', max_ver=' || COALESCE(max_ver, 0)
+             || ') OVER(ORDER BY src, dst) FROM (' || source || ') e) b';
+        PERFORM COMMIT;
+    ELSE
+        how := 'streaming';
+        t_map := 'vgraph.build_' || g || '_map';
+        t_edges := 'vgraph.build_' || g || '_edges';
+        EXECUTE 'DROP TABLE IF EXISTS ' || t_map || ' CASCADE';
+        EXECUTE 'DROP TABLE IF EXISTS ' || t_edges || ' CASCADE';
+        -- a. consolidated edges, once
+        EXECUTE 'CREATE TABLE ' || t_edges || '_raw AS SELECT * FROM (' || source || ') e';
+        -- b. node map: position = rank of the id
+        EXECUTE 'CREATE TABLE ' || t_map || ' AS SELECT id, ROW_NUMBER() OVER(ORDER BY id) - 1 AS pos FROM (SELECT src AS id FROM '
+             || t_edges || '_raw UNION SELECT dst FROM ' || t_edges || '_raw) u ORDER BY id SEGMENTED BY HASH(id) ALL NODES';
+        -- c. edges as positions, unique; both directions for an undirected graph
+        pair := CASE WHEN w IS NOT NULL THEN ', MIN(e.weight) AS weight' ELSE '' END;
+        stmt := 'SELECT ms.pos AS s, md.pos AS d' || pair || ' FROM ' || t_edges || '_raw e JOIN ' || t_map || ' ms ON ms.id = e.src JOIN '
+             || t_map || ' md ON md.id = e.dst GROUP BY 1, 2';
+        IF NOT dir THEN
+            stmt := 'SELECT s, d' || CASE WHEN w IS NOT NULL THEN ', MIN(weight) AS weight' ELSE '' END || ' FROM (SELECT s, d'
+                 || CASE WHEN w IS NOT NULL THEN ', weight' ELSE '' END || ' FROM (' || stmt || ') f UNION ALL SELECT d, s'
+                 || CASE WHEN w IS NOT NULL THEN ', weight' ELSE '' END || ' FROM (' || stmt || ') r WHERE s <> d) b GROUP BY 1, 2';
+        END IF;
+        EXECUTE 'CREATE TABLE ' || t_edges || ' AS SELECT * FROM (' || stmt || ') m ORDER BY s, d SEGMENTED BY HASH(s) ALL NODES';
+        EXECUTE 'DROP TABLE IF EXISTS ' || t_edges || '_raw CASCADE';
+        n_nodes := EXECUTE 'SELECT COUNT(*) FROM ' || t_map;
+        n_edges := EXECUTE 'SELECT COUNT(*) FROM ' || t_edges;
+
+        -- d. Does the table store both directions of every edge? Then no reverse CSR is needed.
+        --    Cheap test first (order-independent hash sums), exact test only if that one says yes.
+        same := FALSE;
+        IF dir AND n_edges > 0 THEN
+            same := EXECUTE 'SELECT SUM(HASH(s, d) % 1000000007) = SUM(HASH(d, s) % 1000000007) FROM ' || t_edges;
+            IF same THEN
+                n := EXECUTE 'SELECT COUNT(*) FROM ' || t_edges || ' a LEFT JOIN ' || t_edges || ' b ON b.s = a.d AND b.d = a.s'
+                  || CASE WHEN w IS NOT NULL THEN ' AND b.weight = a.weight' ELSE '' END || ' WHERE b.s IS NULL';
+                same := (n = 0);
+            END IF;
+        END IF;
+
+        -- e. one statement per section
+        flags := ' USING PARAMETERS graph=' || QUOTE_LITERAL(g) || ', node_count=' || n_nodes || ', edge_count=' || n_edges
+              || ', directed=' || CASE WHEN dir THEN 'true' ELSE 'false' END
+              || ', weighted=' || CASE WHEN w IS NOT NULL THEN 'true' ELSE 'false' END
+              || ', in_equals_out=' || CASE WHEN same THEN 'true' ELSE 'false' END || ', max_ver=' || COALESCE(max_ver, 0);
+        head := 'INSERT INTO vgraph.snapshot SELECT ' || QUOTE_LITERAL(g) || ', ' || sid || ', byte_offset, chunk FROM (SELECT vgraph.gbuild_mapped(';
+        EXECUTE head || 'a, b' || flags || ', section=''ids'') OVER(ORDER BY a, b) FROM (SELECT pos AS a, id AS b FROM ' || t_map || ') q) x';
+        EXECUTE head || 'a, b' || flags || ', section=''out_offsets'') OVER(ORDER BY a, b) FROM (SELECT s AS a, COUNT(*) AS b FROM ' || t_edges || ' GROUP BY s) q) x';
+        EXECUTE head || 'a, b' || flags || ', section=''out_nbrs'') OVER(ORDER BY a, b) FROM (SELECT s AS a, d AS b FROM ' || t_edges || ') q) x';
+        IF w IS NOT NULL THEN
+            EXECUTE head || 'a, b, w' || flags || ', section=''out_weights'') OVER(ORDER BY a, b) FROM (SELECT s AS a, d AS b, weight AS w FROM ' || t_edges || ') q) x';
+        END IF;
+        IF dir AND NOT same THEN
+            EXECUTE head || 'a, b' || flags || ', section=''in_offsets'') OVER(ORDER BY a, b) FROM (SELECT d AS a, COUNT(*) AS b FROM ' || t_edges || ' GROUP BY d) q) x';
+            EXECUTE head || 'a, b' || flags || ', section=''in_nbrs'') OVER(ORDER BY a, b) FROM (SELECT d AS a, s AS b FROM ' || t_edges || ') q) x';
+            IF w IS NOT NULL THEN
+                EXECUTE head || 'a, b, w' || flags || ', section=''in_weights'') OVER(ORDER BY a, b) FROM (SELECT d AS a, s AS b, weight AS w FROM ' || t_edges || ') q) x';
+            END IF;
+        END IF;
+        PERFORM COMMIT;
+        -- f. the header, from the checksum rows of the sections (byte_offset < 0)
+        EXECUTE 'INSERT INTO vgraph.snapshot SELECT ' || QUOTE_LITERAL(g) || ', ' || sid || ', byte_offset, chunk FROM (SELECT vgraph.gbuild_header(byte_offset, chunk'
+             || flags || ') OVER() FROM vgraph.snapshot WHERE graph = ' || QUOTE_LITERAL(g) || ' AND snapshot_id = ' || sid || ' AND byte_offset < 0) h';
+        PERFORM DELETE FROM vgraph.snapshot WHERE graph = g AND snapshot_id = sid AND byte_offset < 0;
+        PERFORM COMMIT;
+        EXECUTE 'DROP TABLE IF EXISTS ' || t_map || ' CASCADE';
+        EXECUTE 'DROP TABLE IF EXISTS ' || t_edges || ' CASCADE';
+    END IF;
     chunks := (SELECT COUNT(*) FROM vgraph.snapshot WHERE graph = g AND snapshot_id = sid);
     IF chunks = 0 THEN
         RAISE EXCEPTION 'vgraph.refresh_graph: graph %: table % has no edges, nothing to build', g, tab;
@@ -330,7 +411,7 @@ BEGIN
     -- 6. Keep the active and the previous snapshot.
     PERFORM DELETE FROM vgraph.snapshot WHERE graph = g AND snapshot_id < COALESCE(prev, sid);
     PERFORM COMMIT;
-    RAISE NOTICE 'vgraph: graph % refreshed: snapshot %, % nodes, % edges, % seconds', g, sid, nodes, edges, secs;
+    RAISE NOTICE 'vgraph: graph % refreshed: snapshot %, % nodes, % edges, % seconds, % build', g, sid, nodes, edges, secs, how;
 END;
 $$;
 

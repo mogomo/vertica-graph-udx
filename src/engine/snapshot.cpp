@@ -31,18 +31,28 @@ void snapshot_layout(SnapshotHeader &h)
     h.total_bytes = at;
 }
 
+std::uint64_t snapshot_checksum_part(const std::uint8_t *data, std::uint64_t size, std::uint64_t first_word)
+{
+    std::uint64_t sum = 0;
+    for (std::uint64_t i = 0; i < size / 8; ++i) {
+        std::uint64_t w;
+        std::memcpy(&w, data + i * 8, 8);
+        if (w == 0) continue;
+        // splitmix64 finalizer over the word and its position
+        std::uint64_t z = w + (first_word + i + 1) * 0x9E3779B97F4A7C15ull;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+        sum ^= z ^ (z >> 31);
+    }
+    return sum;
+}
+
 std::uint64_t snapshot_checksum(const std::uint8_t *data, std::uint64_t size)
 {
-    // FNV-1a style mix over 8-byte words. size is a multiple of 8.
-    const std::uint64_t checksum_word = offsetof(SnapshotHeader, checksum) / 8;
-    std::uint64_t h = 0xcbf29ce484222325ull;
-    for (std::uint64_t i = 0; i < size / 8; ++i) {
-        std::uint64_t w = 0;
-        if (i != checksum_word) std::memcpy(&w, data + i * 8, 8);
-        h = (h ^ w) * 0x100000001b3ull;
-        h ^= h >> 29;
-    }
-    return h;
+    // Everything except the checksum field of the header.
+    const std::uint64_t at = offsetof(SnapshotHeader, checksum);
+    return snapshot_checksum_part(data, at, 0) ^
+           snapshot_checksum_part(data + at + 8, size - at - 8, at / 8 + 1);
 }
 
 bool snapshot_has_magic(const std::uint8_t *data, std::uint64_t size)

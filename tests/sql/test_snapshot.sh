@@ -74,7 +74,7 @@ echo "== build and load"
 expect "gbuild into vgraph.snapshot" "^chunks: [1-9]" "
 DELETE FROM vgraph.snapshot WHERE graph = 'vgtest';
 INSERT INTO vgraph.snapshot
-SELECT 'vgtest', 1, chunk_no, chunk FROM (
+SELECT 'vgtest', 1, byte_offset, chunk FROM (
   SELECT vgraph.gbuild(src, dst USING PARAMETERS graph='vgtest', directed=true, max_ver=4711) OVER(ORDER BY src, dst)
   FROM (SELECT src_id AS src, dst_id AS dst FROM $SCHEMA.contact) e) b;
 COMMIT;
@@ -83,15 +83,15 @@ SELECT 'chunks: ' || COUNT(*) FROM vgraph.snapshot WHERE graph = 'vgtest';"
 expect "gload on every node" "^loaded on all nodes" "
 SELECT CASE WHEN l.loaded = u.up THEN 'loaded on all nodes' ELSE 'loaded on ' || l.loaded || ' of ' || u.up || ' nodes' END
 FROM (SELECT COUNT(DISTINCT node_name) AS loaded
-      FROM (SELECT vgraph.gload(chunk_no, chunk USING PARAMETERS graph='vgtest'$CD, snapshot_id=1) OVER(PARTITION NODES)
-            FROM (SELECT s.chunk_no, s.chunk FROM vgraph.snapshot s CROSS JOIN vgraph.probe p
+      FROM (SELECT vgraph.gload(byte_offset, chunk USING PARAMETERS graph='vgtest'$CD, snapshot_id=1) OVER(PARTITION NODES)
+            FROM (SELECT s.byte_offset, s.chunk FROM vgraph.snapshot s CROSS JOIN vgraph.probe p
                   WHERE s.graph = 'vgtest' AND s.snapshot_id = 1
                     AND p.k IN (SELECT k FROM (SELECT vgraph.gnode(k) OVER(PARTITION NODES) FROM vgraph.probe) n)) c) g WHERE status = 'loaded') l
 CROSS JOIN (SELECT COUNT(*) AS up FROM nodes WHERE node_state = 'UP') u;"
 
 expect "gload again (idempotent)" "^loaded$" "
-SELECT DISTINCT status FROM (SELECT vgraph.gload(chunk_no, chunk USING PARAMETERS graph='vgtest'$CD, snapshot_id=1) OVER(PARTITION NODES)
-      FROM (SELECT s.chunk_no, s.chunk FROM vgraph.snapshot s CROSS JOIN vgraph.probe p
+SELECT DISTINCT status FROM (SELECT vgraph.gload(byte_offset, chunk USING PARAMETERS graph='vgtest'$CD, snapshot_id=1) OVER(PARTITION NODES)
+      FROM (SELECT s.byte_offset, s.chunk FROM vgraph.snapshot s CROSS JOIN vgraph.probe p
                   WHERE s.graph = 'vgtest' AND s.snapshot_id = 1
                     AND p.k IN (SELECT k FROM (SELECT vgraph.gnode(k) OVER(PARTITION NODES) FROM vgraph.probe) n)) c) l;"
 

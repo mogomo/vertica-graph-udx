@@ -54,7 +54,7 @@ private:
     Csr csr_;
 };
 
-// Writes one snapshot file from chunks that may arrive in any order, then
+// Writes one snapshot file from pieces that may arrive in any order, then
 // makes it the active one. A failed or abandoned load leaves the cache as it was.
 class CacheWriter {
 public:
@@ -64,7 +64,8 @@ public:
     CacheWriter &operator=(const CacheWriter &) = delete;
 
     void begin(const std::string &cache_dir, const std::string &graph, std::int64_t snapshot_id);
-    void write_chunk(std::int64_t chunk_no, const char *data, std::uint64_t len);
+    // Pieces may arrive in any order. Together they must cover the file exactly once.
+    void write_at(std::int64_t byte_offset, const char *data, std::uint64_t len);
 
     // Verifies the file (size, structure, checksum), renames it into place,
     // flips ACTIVE (write temp, rename) and removes snapshot files other than

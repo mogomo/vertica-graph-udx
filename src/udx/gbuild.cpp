@@ -4,7 +4,7 @@
 // Two signatures, so that an unweighted graph does not pay for a weight column:
 // every input column costs 8 bytes per edge on the way into the function.
 // max_ver is the journal watermark. It is a parameter, not a column, for the same reason.
-// Output (chunk_no, chunk, node_count, edge_count, max_ver, format_version).
+// Output (byte_offset, chunk, node_count, edge_count, max_ver, format_version).
 // Thin adapter around src/engine/builder.h.
 #include "Vertica.h"
 #include "../engine/builder.h"
@@ -52,10 +52,9 @@ class GBuild : public TransformFunction
             const vgraph::Csr csr = vgraph::snapshot_open(buffer.data(), buffer.size(), false);
 
             const char *bytes = reinterpret_cast<const char *>(buffer.data());
-            vint chunk_no = 0;
-            for (std::uint64_t off = 0; off < buffer.size(); off += vgraph::CHUNK_BYTES, ++chunk_no) {
+            for (std::uint64_t off = 0; off < buffer.size(); off += vgraph::CHUNK_BYTES) {
                 const std::uint64_t len = std::min<std::uint64_t>(vgraph::CHUNK_BYTES, buffer.size() - off);
-                outputWriter.setInt(0, chunk_no);
+                outputWriter.setInt(0, (vint)off);
                 outputWriter.getStringRef(1).copy(bytes + off, len);
                 outputWriter.setInt(2, (vint)csr.node_count);
                 outputWriter.setInt(3, (vint)csr.edge_count);
@@ -88,7 +87,7 @@ protected:
     virtual void getReturnType(ServerInterface &srvInterface, const SizedColumnTypes &inputTypes,
                                SizedColumnTypes &outputTypes)
     {
-        outputTypes.addInt("chunk_no");
+        outputTypes.addInt("byte_offset");
         outputTypes.addLongVarbinary((int32)vgraph::CHUNK_BYTES, "chunk");
         outputTypes.addInt("node_count");
         outputTypes.addInt("edge_count");
