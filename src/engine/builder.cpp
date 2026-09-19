@@ -1,7 +1,9 @@
 #include "builder.h"
+#include "id_index.h"
 #include "version.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <iterator>
 #include <stdexcept>
@@ -32,6 +34,16 @@ void GraphBuilder::add_edge(std::int64_t src, std::int64_t dst, float weight)
     if (!directed_ && src != dst) push(dst, src, weight);
 }
 
+void GraphBuilder::enable_weights()
+{
+    if (weighted_) return;
+    weighted_ = true;
+    for (Chunk &c : chunks_) {
+        c.w.reset(new float[CHUNK_EDGES]);
+        std::fill(c.w.get(), c.w.get() + c.n, 1.0f);
+    }
+}
+
 void GraphBuilder::add_node(std::int64_t id) { extra_nodes_.push_back(id); }
 
 // ids := sorted union of ids and block. block is consumed.
@@ -53,27 +65,46 @@ struct KeyW {
     std::uint64_t key;
     float w;
 };
-inline pos_t position(const std::vector<std::int64_t> &ids, std::int64_t id)
+double seconds_since(std::chrono::steady_clock::time_point &t)
 {
-    return static_cast<pos_t>(std::lower_bound(ids.begin(), ids.end(), id) - ids.begin());
+    const auto now = std::chrono::steady_clock::now();
+    const double s = std::chrono::duration<double>(now - t).count();
+    t = now;
+    return s;
 }
 } // namespace
 
 void GraphBuilder::finish(std::int64_t max_epoch, SnapshotBuffer &out)
 {
-    // 1. Node ids: sorted union of all endpoints, one chunk at a time.
+    auto clock = std::chrono::steady_clock::now();
+
+    // 1. Node ids: sorted union of all endpoints. Ids not yet known are collected
+    //    in a block; a full block is merged into ids and the index is rebuilt.
     std::vector<std::int64_t> ids;
+    IdIndex index;
     {
         std::vector<std::int64_t> block;
-        merge_ids(ids, extra_nodes_);
-        std::vector<std::int64_t>().swap(extra_nodes_);
-        for (const Chunk &c : chunks_) {
-            block.assign(c.sd.get(), c.sd.get() + c.n * 2);
+        auto flush = [&]() {
             merge_ids(ids, block);
+            index.build(ids.data(), ids.size());
+        };
+        block.swap(extra_nodes_);
+        flush();
+        for (const Chunk &c : chunks_) {
+            for (std::size_t i = 0; i < c.n * 2; ++i) {
+                // Same src as the row before: already handled.
+                if ((i & 1) == 0 && i >= 2 && c.sd[i] == c.sd[i - 2]) continue;
+                if (index.find(c.sd[i]) == NO_POS) {
+                    block.push_back(c.sd[i]);
+                    if (block.size() >= ID_BLOCK) flush();
+                }
+            }
         }
+        flush();
     }
     if (ids.size() >= NO_POS) throw std::runtime_error("graph has more nodes than fit uint32");
     const std::uint64_t n = ids.size();
+    timings_.ids = seconds_since(clock);
 
     // 2. Edges as keys (src position << 32 | dst position). Raw chunks are freed on the way.
     std::vector<std::uint64_t> keys;
@@ -85,8 +116,8 @@ void GraphBuilder::finish(std::int64_t max_epoch, SnapshotBuffer &out)
         pos_t last_pos = NO_POS;
         for (std::size_t i = 0; i < c.n; ++i) {
             const std::int64_t s = c.sd[i * 2], d = c.sd[i * 2 + 1];
-            if (last_pos == NO_POS || s != last_src) { last_src = s; last_pos = position(ids, s); }
-            keys.push_back((static_cast<std::uint64_t>(last_pos) << 32) | position(ids, d));
+            if (last_pos == NO_POS || s != last_src) { last_src = s; last_pos = index.find(s); }
+            keys.push_back((static_cast<std::uint64_t>(last_pos) << 32) | index.find(d));
         }
         if (weighted_) weights.insert(weights.end(), c.w.get(), c.w.get() + c.n);
         c.sd.reset();
@@ -94,6 +125,7 @@ void GraphBuilder::finish(std::int64_t max_epoch, SnapshotBuffer &out)
     }
     std::vector<Chunk>().swap(chunks_);
     raw_count_ = 0;
+    timings_.keys = seconds_since(clock);
 
     // 3. Sort and remove duplicates, unless the input came sorted and unique (gbuild does).
     bool strictly_sorted = true;
@@ -115,6 +147,7 @@ void GraphBuilder::finish(std::int64_t max_epoch, SnapshotBuffer &out)
         }
     }
     const std::uint64_t e = keys.size();
+    timings_.sort = seconds_since(clock);
 
     // 4. Write the snapshot.
     SnapshotHeader h;
@@ -160,6 +193,7 @@ void GraphBuilder::finish(std::int64_t max_epoch, SnapshotBuffer &out)
     std::memcpy(base, &h, sizeof(h));
     h.checksum = snapshot_checksum(base, h.total_bytes);
     std::memcpy(base, &h, sizeof(h));
+    timings_.write = seconds_since(clock);
 }
 
 } // namespace vgraph

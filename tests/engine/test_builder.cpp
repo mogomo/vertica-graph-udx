@@ -60,6 +60,17 @@ int main()
         g.for_in(t.pos(2), [&](pos_t, float x) { w.push_back(x); });
         CHECK(w == std::vector<float>({1.5f}));
     }
+    {   // weights switched on after the first edges
+        GraphBuilder b(true, false);
+        b.add_edge(1, 2);
+        b.enable_weights();
+        b.add_edge(2, 3, 4.0f);
+        TestGraph t;
+        b.finish(0, t.buffer);
+        t.csr = snapshot_open(t.buffer.data(), t.buffer.size(), true);
+        CHECK(t.csr.weighted);
+        CHECK(t.csr.out_weights[0] == 1.0f && t.csr.out_weights[1] == 4.0f);
+    }
     {   // empty graph
         TestGraph t;
         build(t, {});

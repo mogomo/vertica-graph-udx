@@ -5,6 +5,7 @@
 #
 #   make                      build build/libvgraph.so
 #   make test                 engine unit tests, no Vertica needed
+#   make bench [EDGES=n]      engine build and BFS timings on a generated graph
 #   make deploy [FENCED=yes|no]   install the library and functions (default: fenced)
 #   make undeploy             remove functions and library
 #   make clean
@@ -23,7 +24,7 @@ LIB       := $(BUILD_DIR)/libvgraph.so
 ENGINE_SRC := $(wildcard src/engine/*.cpp)
 ENGINE_HDR := $(wildcard src/engine/*.h)
 UDX_SRC    := $(wildcard src/udx/*.cpp)
-TEST_SRC   := $(wildcard tests/engine/*.cpp)
+TEST_SRC   := $(wildcard tests/engine/test_*.cpp)
 TEST_BIN   := $(patsubst tests/engine/%.cpp,$(BUILD_DIR)/tests/%,$(TEST_SRC))
 
 # Reported by gversion().
@@ -33,7 +34,7 @@ COMMON_FLAGS := -std=c++17 -g $(OPT) -Wall -DVGRAPH_BUILD_FLAGS='"$(BUILD_FLAGS)
 UDX_FLAGS    := $(COMMON_FLAGS) -I $(SDK_HOME)/include -Wno-unused-value -shared -fPIC \
                 -D_GLIBCXX_USE_CXX11_ABI=$(VERTICA_CXX11_ABI)
 
-.PHONY: all test deploy undeploy clean
+.PHONY: all test bench deploy undeploy clean
 
 all: $(LIB)
 
@@ -49,6 +50,10 @@ $(BUILD_DIR)/tests/%: tests/engine/%.cpp $(wildcard tests/engine/*.h) $(ENGINE_S
 test: $(TEST_BIN)
 	@for t in $(TEST_BIN); do echo "== $$t"; $$t || exit 1; done
 	@echo "All engine tests passed."
+
+# Engine build benchmark on a generated graph. EDGES defaults to 100 million.
+bench: $(BUILD_DIR)/tests/bench_builder
+	$(BUILD_DIR)/tests/bench_builder $(EDGES)
 
 deploy: $(LIB)
 	scripts/deploy.sh --fenced=$(FENCED)
