@@ -103,13 +103,13 @@ fi
 echo "== journal table, register, first refresh"
 run_sql "cleanup of an earlier run" "CALL vgraph.unregister_graph('$G');" > /dev/null
 [ "$ECHO_ONLY" = yes ] || rm -rf "$CACHE_DIR/$G"
-expect "journal table (BOOLEAN del, timestamp version, partitioned by version date)" "^journal rows: [1-9]" "
+expect "journal table (BOOLEAN del, TIMESTAMPTZ version from CLOCK_TIMESTAMP, partitioned by version date)" "^journal rows: [1-9]" "
 DROP TABLE IF EXISTS $SCHEMA.journal CASCADE;
 CREATE TABLE $SCHEMA.journal (src INT NOT NULL, dst INT NOT NULL, del BOOLEAN NOT NULL DEFAULT FALSE,
-                              ts TIMESTAMP NOT NULL DEFAULT SYSDATE())
+                              ts TIMESTAMPTZ NOT NULL DEFAULT CLOCK_TIMESTAMP())
     ORDER BY src, dst SEGMENTED BY HASH(src) ALL NODES
-    PARTITION BY ts::DATE GROUP BY CALENDAR_HIERARCHY_DAY(ts::DATE, 2, 2);
-INSERT INTO $SCHEMA.journal (src, dst, ts) SELECT src_id, dst_id, SYSDATE() - INTERVAL '1 day' FROM $SCHEMA.contact;
+    PARTITION BY (ts AT TIME ZONE 'UTC')::DATE GROUP BY CALENDAR_HIERARCHY_DAY((ts AT TIME ZONE 'UTC')::DATE, 2, 2);
+INSERT INTO $SCHEMA.journal (src, dst, ts) SELECT src_id, dst_id, CLOCK_TIMESTAMP() - INTERVAL '1 day' FROM $SCHEMA.contact;
 COMMIT;
 SELECT 'journal rows: ' || COUNT(*) FROM $SCHEMA.journal;"
 
@@ -200,12 +200,32 @@ SELECT 'left: ' || (SELECT COUNT(*) FROM v_catalog.stored_proc_triggers WHERE tr
        (SELECT COUNT(*) FROM v_catalog.views WHERE table_name ILIKE '${G}_delta') || ' ' ||
        (SELECT COUNT(*) FROM vgraph.snapshot WHERE graph = '$G') || ' ' || (SELECT COUNT(*) FROM vgraph.manifest WHERE graph = '$G');"
 
-echo "== margin 0: the delta view is empty right after a refresh"
-expect "sentinel only" "^rows 1, journal rows 0$" "
+echo "== margin 0: the strictest case"
+expect "delta view holds only the sentinel right after a refresh" "^rows 1, journal rows 0$" "
 CALL vgraph.register_graph('$G', '$SCHEMA.journal', 'src', 'dst', 'del', NULL, TRUE, 'ts', 0);
 CALL vgraph.refresh_graph('$G');
-SELECT 'rows ' || COUNT(*) || ', journal rows ' || COUNT(src) FROM $SCHEMA.${G}_delta;
-CALL vgraph.unregister_graph('$G');"
+SELECT 'rows ' || COUNT(*) || ', journal rows ' || COUNT(src) FROM $SCHEMA.${G}_delta;"
+
+# A writer that inserted before the refresh and commits after it. Its row is not in the snapshot,
+# and its version is older than the refresh. It must still be seen: refresh_graph finds the open
+# writer through its lock and starts the delta there.
+if [ "$ECHO_ONLY" = yes ]; then
+    echo "-- background session: INSERT INTO $SCHEMA.journal (src, dst) VALUES (1, 900000777); SELECT SLEEP(20); COMMIT;"
+else
+    ( printf "INSERT INTO $SCHEMA.journal (src, dst) VALUES (1, 900000777);\nSELECT SLEEP(20);\nCOMMIT;\n" | vsql -X -A -t -q > /dev/null 2>&1 ) &
+    WRITER=$!
+    sleep 4
+fi
+expect "status sees the open writer" "open transactions are writing" "CALL vgraph.status('$G');"
+expect "refresh while the writer is open: its row is not visible yet" "^visible during the open transaction: 0$" "
+CALL vgraph.refresh_graph('$G');
+SELECT 'visible during the open transaction: ' || COUNT(*) FROM (SELECT vgraph.gkhop(start, target, src, dst, del, weight, ver, snapshot_id
+       USING PARAMETERS graph='$G', depth=1, start=1) OVER() FROM $SCHEMA.${G}_delta) r WHERE node = 900000777;"
+[ "$ECHO_ONLY" = yes ] || wait $WRITER
+expect "after the late commit the row is seen, without another refresh" "^visible after the commit: 1$" "
+SELECT 'visible after the commit: ' || COUNT(*) FROM (SELECT vgraph.gkhop(start, target, src, dst, del, weight, ver, snapshot_id
+       USING PARAMETERS graph='$G', depth=1, start=1) OVER() FROM $SCHEMA.${G}_delta) r WHERE node = 900000777;"
+run_sql "cleanup" "CALL vgraph.unregister_graph('$G');" > /dev/null
 
 [ "$ECHO_ONLY" = yes ] && exit 0
 if [ "$FAILED" -ne 0 ]; then echo "test_freshness: $FAILED FAILED"; exit 1; fi

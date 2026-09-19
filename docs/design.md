@@ -85,12 +85,28 @@ of the mapped snapshot (src/engine/delta.h) and runs the algorithm on the result
   empty input. Every row carries the id of the snapshot the view belongs to.
 - The boundary is a literal, written into the view by refresh_graph, so Vertica
   can prune partitions and storage containers.
-- Boundary for a timestamp version = database clock at the start of the refresh
-  minus the margin. A row can be missing from the snapshot only if it was
-  committed after the build started reading; its insertion time is then later
-  than that boundary, as long as the margin is longer than the longest write
-  transaction. For an INT version the boundary is the highest version minus
-  the margin.
+- Boundary for a timestamp version. A version says when a row was written;
+  visibility depends on when it was committed. The gap is the open
+  transaction. A row is missing from the snapshot only if it was committed
+  after the build started reading, so it was written either after the refresh
+  started or by a transaction that was open at that moment. An open writer
+  holds an insert lock, visible in `v_monitor.locks` with its request time
+  (checked for INSERT and COPY, from another session, on one node and on Eon).
+  Hence: boundary = LEAST(clock at refresh start, earliest lock request of an
+  open writer) - margin. With `CLOCK_TIMESTAMP()` versions a row is stamped
+  after its lock was granted, so the argument is exact. With `SYSDATE()` the
+  stamp is the statement start, which can be earlier than the lock grant if the
+  statement waited; the margin (default 60 s) covers that and clock skew.
+  `NOW()` stamps the transaction start and is not suitable.
+  Measured example: refresh started 21:15:24.80, an open writer had asked for
+  its lock at 21:15:19.7933; the boundary became 21:15:19.7933, the late row's
+  version was 21:15:19.7940, so the row was in the delta.
+  For an INT version the lock time cannot be mapped to a version: boundary =
+  highest version minus the margin, and the margin must cover open writers.
+- Consolidation for the build: unweighted graphs take all add rows minus the
+  edges whose latest row is a delete; only edges that were ever deleted are
+  ranked (100 million rows: refresh 160 s -> 64 s). Weighted graphs rank every
+  edge, because the latest weight must win.
 - Rows inside the margin are in the snapshot and in the delta. That is
   harmless: rows are applied in version order and the last op wins, so applying
   a suffix of the journal again always ends in the same state.
@@ -103,7 +119,7 @@ Reading the delta, measured on a 100 million row journal with 1000 new rows:
 |---|---|---|
 | default encoding | 1 to 3 ms | 12 to 46 ms |
 | `ENCODING RLE` on src | 1 to 3 ms | 5 s |
-| partitioned by version date (any encoding) | 1 to 2 ms | 1 to 2 ms: they are never merged |
+| partitioned by version date (any encoding) | 1 to 2 ms | 1 ms: they are never merged |
 | projection sorted by the version column | | 5 s: the optimizer does not choose it; 10 ms with a table-level `PROJS` hint |
 
 Hence the recommendation to partition the journal by the version date, and the

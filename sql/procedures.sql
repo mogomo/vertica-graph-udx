@@ -61,8 +61,9 @@ $$;
 -- op_col: BOOLEAN (true = edge deleted) or INT (+1 added, -1 deleted), or NULL when edges are only added.
 -- ver_col: TIMESTAMP, TIMESTAMPTZ or INT column that orders the journal (last row wins). NULL = static
 --          graph: queries see the snapshot only, changes show up at the next refresh.
--- margin:  overlap of the delta. Seconds for a timestamp ver_col (NULL = 600), units of ver_col for INT.
---          It must be longer than the longest transaction that writes edges.
+-- margin:  overlap of the delta. Timestamp ver_col: seconds (NULL = 60). Open transactions are found
+--          through their locks, so it only covers clock differences and statement-start versions.
+--          INT ver_col: units of that column; there it must also cover the longest write transaction.
 CREATE OR REPLACE PROCEDURE vgraph.register_graph(g VARCHAR, edge_table VARCHAR, src_col VARCHAR, dst_col VARCHAR,
                                                   op_col VARCHAR, weight_col VARCHAR, directed BOOLEAN,
                                                   ver_col VARCHAR, margin INT) LANGUAGE PLvSQL AS $$
@@ -99,7 +100,7 @@ BEGIN
         ver_type := (SELECT data_type FROM v_catalog.columns WHERE table_schema ILIKE SPLIT_PART(edge_table, '.', 1)
                      AND table_name ILIKE SPLIT_PART(edge_table, '.', 2) AND column_name ILIKE ver_col);
         IF ver_type ILIKE 'timestamp%' THEN
-            m := COALESCE(margin, 600) * 1000000;
+            m := COALESCE(margin, 60) * 1000000;
         ELSIF ver_type ILIKE 'int%' THEN
             IF margin IS NULL THEN
                 RAISE EXCEPTION 'vgraph.register_graph: an INT ver_col needs an explicit margin (units of %)', ver_col;
@@ -173,6 +174,13 @@ BEGIN
     n := EXECUTE 'SELECT COUNT(src) FROM (SELECT src, dst, del, weight, ver FROM ' || SPLIT_PART(tab, '.', 1) || '.' || g || '_delta) d';
     ms := (SELECT DATEDIFF('millisecond', t0, CLOCK_TIMESTAMP()));
     RAISE NOTICE 'vgraph: graph %: % journal rows in the delta, read in % ms', g, n, ms;
+    n := (SELECT COUNT(DISTINCT transaction_id) FROM v_monitor.locks WHERE LOWER(object_name) = LOWER('Table:' || tab)
+          AND (lock_mode ILIKE '%I%' OR lock_mode = 'X'));
+    IF n > 0 THEN
+        ms := (SELECT DATEDIFF('second', MIN(request_timestamp), CLOCK_TIMESTAMP()) FROM v_monitor.locks
+               WHERE LOWER(object_name) = LOWER('Table:' || tab) AND (lock_mode ILIKE '%I%' OR lock_mode = 'X'));
+        RAISE NOTICE 'vgraph: graph %: % open transactions are writing to %, the oldest for % seconds. A refresh now keeps their rows in the delta.', g, n, tab, ms;
+    END IF;
     IF ms > 500 THEN
         RAISE WARNING 'vgraph: graph %: reading the delta is slow (% ms) and every query pays for it. Usual causes: the journal is not partitioned by the date of its version column, so new rows were merged into old storage; or ENCODING RLE on the src column. Fix: partition the journal by the version date, or refresh more often. See README, section Freshness.', g, ms;
     END IF;
@@ -188,8 +196,8 @@ DECLARE
     tab VARCHAR(256); src VARCHAR(128); dst VARCHAR(128); op VARCHAR(128); w VARCHAR(128); ver VARCHAR(128);
     dir BOOLEAN; margin INT; op_type VARCHAR(128); ver_type VARCHAR(128);
     prev INT; sid INT; chunks INT; max_ver INT; v_from VARCHAR(64);
-    cols VARCHAR(1000); source VARCHAR(4000); del_expr VARCHAR(400);
-    t0 TIMESTAMPTZ; secs FLOAT; nodes INT; edges INT; fmt INT;
+    cols VARCHAR(1000); source VARCHAR(4000); del_expr VARCHAR(400); del_a VARCHAR(400); del_k VARCHAR(400);
+    t0 TIMESTAMPTZ; cut TIMESTAMPTZ; secs FLOAT; nodes INT; edges INT; fmt INT;
 BEGIN
     tab := (SELECT edge_table FROM vgraph.manifest WHERE graph = g);
     IF tab IS NULL THEN
@@ -210,10 +218,15 @@ BEGIN
     t0 := (SELECT CLOCK_TIMESTAMP());
 
     -- 1. Delta boundary, taken BEFORE the build reads the table.
-    --    Timestamp version: database clock now, minus the margin. A row is missing from the snapshot only if
-    --    it was committed after the build read started; its version (insertion time) is then later than
-    --    now minus the longest write transaction. Rows that are in both the snapshot and the delta are harmless.
-    --    INT version: highest version minus the margin.
+    --    A row is missing from the snapshot only if it is committed after the build read starts.
+    --    Timestamp version (insertion clock time): such a row was written either after now, or by a
+    --    transaction that is open right now. An open writer holds an insert lock on the table, and
+    --    v_monitor.locks shows when it asked for it. So:
+    --        boundary = LEAST(now, earliest lock request of an open writer) - margin
+    --    The margin only has to cover clock differences between nodes and versions taken at statement
+    --    start (SYSDATE) instead of at write time (CLOCK_TIMESTAMP).
+    --    INT version: highest version minus the margin; the margin has to cover open writers.
+    --    Rows that are in both the snapshot and the delta are harmless.
     max_ver := 0;
     v_from := NULL;
     IF ver IS NOT NULL THEN
@@ -224,16 +237,27 @@ BEGIN
             v_from := (max_ver - margin)::VARCHAR;
         ELSE
             max_ver := EXECUTE 'SELECT MAX((EXTRACT(EPOCH FROM ' || ver || ') * 1000000)::INT) FROM ' || tab;
+            cut := (SELECT LEAST(CLOCK_TIMESTAMP(), COALESCE(MIN(request_timestamp), CLOCK_TIMESTAMP()))
+                    FROM v_monitor.locks
+                    WHERE LOWER(object_name) = LOWER('Table:' || tab)
+                      AND (lock_mode ILIKE '%I%' OR lock_mode = 'X')
+                      AND transaction_id <> (SELECT transaction_id FROM v_monitor.current_session));
+            cut := (SELECT cut - (margin // 1000000) * INTERVAL '1 second');
             IF ver_type ILIKE 'timestamptz%' OR ver_type ILIKE '%with time zone%' THEN
-                v_from := (SELECT 'TIMESTAMPTZ ''' || TO_CHAR((CLOCK_TIMESTAMP() - (margin // 1000000) * INTERVAL '1 second') AT TIME ZONE 'UTC',
-                                                              'YYYY-MM-DD HH24:MI:SS.US') || '+00''');
+                v_from := (SELECT 'TIMESTAMPTZ ''' || TO_CHAR(cut AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') || '+00''');
             ELSE
-                v_from := (SELECT 'TIMESTAMP ''' || TO_CHAR(SYSDATE() - (margin // 1000000) * INTERVAL '1 second', 'YYYY-MM-DD HH24:MI:SS.US') || '''');
+                -- Plain TIMESTAMP versions are local times of the writing session: all writers and this
+                -- session must use the same time zone.
+                v_from := (SELECT 'TIMESTAMP ''' || TO_CHAR(cut::TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS.US') || '''');
             END IF;
         END IF;
     END IF;
 
     -- 2. Consolidated edges: the latest row of every (src, dst) by version, kept if it is not a delete.
+    --    Unweighted: gbuild stores a repeated edge once, so only edges that were ever deleted need
+    --    ranking. All add rows are taken, minus the edges whose latest row is a delete. That is one
+    --    scan plus a small join, instead of ranking the whole journal.
+    --    Weighted: the latest weight must win, so every edge is ranked.
     cols := src || '::INT AS src, ' || dst || '::INT AS dst';
     IF w IS NOT NULL THEN
         cols := cols || ', ' || w || '::FLOAT AS weight';
@@ -244,10 +268,26 @@ BEGIN
         op_type := (SELECT data_type FROM v_catalog.columns WHERE table_schema ILIKE SPLIT_PART(tab, '.', 1)
                     AND table_name ILIKE SPLIT_PART(tab, '.', 2) AND column_name ILIKE op);
         del_expr := CASE WHEN op_type ILIKE 'bool%' THEN 'COALESCE(' || op || ', FALSE)' ELSE '(COALESCE(' || op || ', 1) < 0)' END;
-        source := 'SELECT src, dst' || CASE WHEN w IS NOT NULL THEN ', weight' ELSE '' END
-               || ' FROM (SELECT ' || cols || ', ' || del_expr || ' AS del, ROW_NUMBER() OVER(PARTITION BY ' || src || ', ' || dst
-               || ' ORDER BY ' || ver || ' DESC) AS rn FROM ' || tab || ' WHERE ' || src || ' IS NOT NULL AND ' || dst
-               || ' IS NOT NULL) j WHERE rn = 1 AND NOT del';
+        IF w IS NOT NULL THEN
+            source := 'SELECT src, dst, weight FROM (SELECT ' || cols || ', ' || del_expr || ' AS del, ROW_NUMBER() OVER(PARTITION BY '
+                   || src || ', ' || dst || ' ORDER BY ' || ver || ' DESC) AS rn FROM ' || tab || ' WHERE ' || src || ' IS NOT NULL AND '
+                   || dst || ' IS NOT NULL) j WHERE rn = 1 AND NOT del';
+        ELSE
+            IF op_type ILIKE 'bool%' THEN
+                del_a := 'COALESCE(a.' || op || ', FALSE)';
+                del_k := 'COALESCE(k.' || op || ', FALSE)';
+            ELSE
+                del_a := '(COALESCE(a.' || op || ', 1) < 0)';
+                del_k := '(COALESCE(k.' || op || ', 1) < 0)';
+            END IF;
+            source := 'SELECT a.' || src || '::INT AS src, a.' || dst || '::INT AS dst FROM ' || tab || ' a LEFT JOIN ('
+                   || 'SELECT s, d FROM (SELECT k.' || src || ' AS s, k.' || dst || ' AS d, ' || del_k || ' AS del, '
+                   || 'ROW_NUMBER() OVER(PARTITION BY k.' || src || ', k.' || dst || ' ORDER BY k.' || ver || ' DESC) AS rn FROM ' || tab || ' k '
+                   || 'WHERE (k.' || src || ', k.' || dst || ') IN (SELECT ' || src || ', ' || dst || ' FROM ' || tab || ' WHERE ' || del_expr || ')) r '
+                   || 'WHERE rn = 1 AND del) dead ON dead.s = a.' || src || ' AND dead.d = a.' || dst
+                   || ' WHERE dead.s IS NULL AND NOT ' || del_a
+                   || ' AND a.' || src || ' IS NOT NULL AND a.' || dst || ' IS NOT NULL';
+        END IF;
     END IF;
 
     -- 3. Build and store the chunks.

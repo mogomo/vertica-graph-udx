@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS vgraph.manifest (
 ) UNSEGMENTED ALL NODES;
 
 -- Snapshot ids. Never reused, so an old cache file can never pass as a newer snapshot.
-CREATE SEQUENCE IF NOT EXISTS vgraph.snapshot_seq;
+CREATE SEQUENCE IF NOT EXISTS vgraph.snapshot_seq CACHE 1;
 
 -- Rows on every node, so that functions with OVER(PARTITION NODES) run on
 -- every node. It must be segmented: Vertica reads an unsegmented table on one
