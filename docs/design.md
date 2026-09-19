@@ -17,14 +17,21 @@ completed with it.
 
 ## gload and PARTITION NODES
 
-`vgraph.gload(...) OVER(PARTITION NODES)` runs one function instance on every node.
-Because `vgraph.snapshot` is unsegmented, each instance reads all chunks from
-its local copy and writes its own cache file.
+`gload(...) OVER(PARTITION NODES)` runs one function instance on every node
+that receives input rows.
 
-Verified so far: single node (Vertica 26.2, aarch64). Open: the same check on
-a multi-node Eon cluster. `tests/sql/test_snapshot.sh` compares the number of
-nodes that report `loaded` with the number of UP nodes, so it fails on a
-cluster where a node gets no chunks.
+Measured (Vertica 26.2):
+
+- Single node: works as written, the node loads all chunks.
+- Eon, 3 nodes: with `vgraph.snapshot` (unsegmented) as the only input, Vertica
+  reads the replicated table on one node only, so only that node runs gload.
+  The same is true for ginfo over the unsegmented `vgraph.probe`.
+- Eon, 3 nodes: when the chunks are joined to a segmented table that has
+  exactly one row on every node, every node runs gload and gets all chunks.
+
+The mechanism for multi-node clusters is therefore still open. The test
+`tests/sql/test_snapshot.sh` compares the number of nodes that report `loaded`
+with the number of UP nodes, so it fails on a cluster until this is settled.
 
 ## Cache rules
 

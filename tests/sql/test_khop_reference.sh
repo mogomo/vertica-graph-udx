@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Integration test: gkhop must return exactly what the demo repo's BFS returns.
 #
-#   tests/sql/test_khop_reference.sh [--rows=N] [--keep] [--echo_only]
+#   tests/sql/test_khop_reference.sh [--rows=N] [--schema=NAME] [--keep] [--echo_only]
 #
 # Reference: procedure bfs() of ../vertica-graphs-and-trees/graph_contacts_demo.sql.
 # It fills reach(person_id, lvl) with lvl 1 = the root, so hops = lvl - 1.
 # The demo script is run as it is, only its ROWS line is overridden.
-# It drops and recreates schema GRAPH_DEMO. --keep reuses an existing GRAPH_DEMO.
+# It drops and recreates schema GRAPH_DEMO (or --schema=NAME). --keep reuses the existing one.
 #
 # Connection: vsql reads VSQL_HOST, VSQL_PORT, VSQL_USER, VSQL_PASSWORD,
 # VSQL_DATABASE from the environment.
@@ -15,6 +15,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 ROWS=2000000
+SCHEMA=GRAPH_DEMO
 KEEP=no
 ECHO_ONLY=no
 DEMO_SQL=../vertica-graphs-and-trees/graph_contacts_demo.sql
@@ -24,6 +25,7 @@ ROOT=1
 for arg in "$@"; do
     case "$arg" in
         --rows=*)    ROWS="${arg#--rows=}" ;;
+        --schema=*)  SCHEMA="${arg#--schema=}" ;;
         --keep)      KEEP=yes ;;
         --echo_only) ECHO_ONLY=yes ;;
         -h|--help)   sed -n '2,12p' "$0"; exit 0 ;;
@@ -38,7 +40,7 @@ fi
 
 # One session: reach is a LOCAL TEMP table of the session that called bfs().
 MAX_LEVEL=$(( $(echo $DEPTHS | tr ' ' '\n' | sort -n | tail -1) + 1 ))
-TEST_SQL="SET SEARCH_PATH TO GRAPH_DEMO, public;
+TEST_SQL="SET SEARCH_PATH TO $SCHEMA, public;
 \\o /dev/null
 CALL bfs($ROOT, $MAX_LEVEL, 50);
 \\o
@@ -69,8 +71,8 @@ if [ "$ECHO_ONLY" = yes ]; then
 fi
 
 if [ "$KEEP" = no ]; then
-    echo "== generating demo data: $ROWS rows in schema GRAPH_DEMO"
-    sed "s/^\\\\set ROWS .*/\\\\set ROWS $ROWS/" "$DEMO_SQL" | vsql -X -q -v ON_ERROR_STOP=1 > /dev/null
+    echo "== generating demo data: $ROWS rows in schema $SCHEMA"
+    sed -e "s/^\\\\set ROWS .*/\\\\set ROWS $ROWS/" -e "s/^\\\\set SCHEMA .*/\\\\set SCHEMA $SCHEMA/" "$DEMO_SQL" | vsql -X -q -v ON_ERROR_STOP=1 > /dev/null
 fi
 
 echo "== gkhop against the demo BFS, root $ROOT, depths $DEPTHS"

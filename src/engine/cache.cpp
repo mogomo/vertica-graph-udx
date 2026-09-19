@@ -22,9 +22,14 @@ namespace {
     throw std::runtime_error(msg);
 }
 
+// Like mkdir -p. New directories get mode 0700.
 void make_dir(const std::string &path)
 {
-    if (mkdir(path.c_str(), 0700) != 0 && errno != EEXIST) fail("cannot create directory", path);
+    for (std::size_t at = 1; at <= path.size(); ++at) {
+        if (at != path.size() && path[at] != '/') continue;
+        const std::string part = path.substr(0, at);
+        if (mkdir(part.c_str(), 0700) != 0 && errno != EEXIST) fail("cannot create directory", part);
+    }
 }
 
 // True if the file starts with the vgraph magic.
