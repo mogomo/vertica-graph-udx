@@ -141,16 +141,27 @@ it reads the whole table on every call. It is meant for tests and small tables.
 
 ### First measurements
 
-100 million edge rows, 16.7 million nodes, one node (8 cores, 15 GB, aarch64),
-Vertica 26.2. Server time from `v_monitor.query_requests`.
+100 million edge rows (16.7 million people, each contact stored in both
+directions), data and SQL reference from the demo repository. Server time from
+`v_monitor.query_requests`. The k-hop question: everyone within 9 hops of
+person 1, about 5 million people.
 
-| Step                                              | fenced  | unfenced |
-|---------------------------------------------------|--------:|---------:|
-| gbuild into `vgraph.snapshot` (once per refresh)  | 38.5 s  | 32.7 s   |
-| gload                                             | 2.9 s   | 3.0 s    |
-| gkhop depth 9 from person 1 (5.55 million nodes)  | 0.93 s  | 0.74 s   |
-| gkhop depth 2 (44 nodes)                          | 6 ms    | 3 ms     |
-| same depth 9 question with the SQL BFS procedure of the demo repository | 2.45 s | |
+Environment A: one node, aarch64, 8 cores, 15 GB RAM, Vertica 26.2.0-1.
+Environment B: 3-node Eon cluster, x86_64, 2 cores and 15 GB RAM per node
+(a small and busy machine, swapping during the test), Vertica 26.2.0-2.
+
+| Step                                             | A fenced | A unfenced | B fenced | B unfenced |
+|--------------------------------------------------|---------:|-----------:|---------:|-----------:|
+| gbuild into `vgraph.snapshot` (once per refresh) | 38.5 s   | 32.7 s     | 129.3 s  | not run    |
+| gload, all nodes                                 | 2.9 s    | 3.0 s      | 10.8 s   | not run    |
+| gkhop depth 9                                    | 0.93 s   | 0.74 s     | 2.03 s   | 1.29 s     |
+| gkhop depth 2 (about 40 people)                  | 6 ms     | 3 ms       | 10 ms    | 9 ms       |
+| SQL BFS procedure of the demo repository, 9 hops | 2.45 s   |            | 5.56 s   |            |
+
+gkhop and the SQL procedure return the same people in every run. Most of the
+gkhop time at depth 9 is spent returning 5 million rows; the traversal itself
+takes about 0.15 s in environment A. On B the build was run fenced only,
+because the node had little free memory.
 
 ## Tests
 
