@@ -9,10 +9,11 @@
 
 namespace vgraph {
 
-// component[p] = position of the smallest node id in p's component.
-// Positions follow id order, so the smallest position is the smallest id.
+// component[p] = position of the node with the smallest id in p's component.
 // Union-find with path halving; the smaller position always becomes the root.
-// Memory: 4 bytes per node.
+// In a snapshot positions follow id order. Nodes added by a delta overlay do
+// not, so the smallest id of every component is found in a second pass.
+// Memory: 8 bytes per node.
 template <class G>
 void connected_components(const G &g, std::vector<pos_t> &component)
 {
@@ -34,7 +35,13 @@ void connected_components(const G &g, std::vector<pos_t> &component)
             else if (b < a) component[a] = b;
         });
     }
-    for (pos_t p = 0; p < n; ++p) component[p] = root(p);
+    std::vector<pos_t> smallest(n);
+    for (pos_t p = 0; p < n; ++p) smallest[p] = p;
+    for (pos_t p = 0; p < n; ++p) {
+        const pos_t r = root(p);
+        if (g.id_of(p) < g.id_of(smallest[r])) smallest[r] = p;
+    }
+    for (pos_t p = 0; p < n; ++p) component[p] = smallest[root(p)];
 }
 
 } // namespace vgraph
