@@ -27,7 +27,7 @@ TEST_SRC   := $(wildcard tests/engine/*.cpp)
 TEST_BIN   := $(patsubst tests/engine/%.cpp,$(BUILD_DIR)/tests/%,$(TEST_SRC))
 
 # Reported by gversion().
-BUILD_FLAGS := $(OPT) -std=c++17 $(shell uname -m) $(notdir $(CXX))-$(shell $(CXX) -dumpfullversion)
+BUILD_FLAGS := $(OPT) -std=c++17 $(shell uname -m) $(notdir $(CXX))-$(shell $(CXX) -dumpfullversion 2>/dev/null || $(CXX) -dumpversion)
 
 COMMON_FLAGS := -std=c++17 -g $(OPT) -Wall -DVGRAPH_BUILD_FLAGS='"$(BUILD_FLAGS)"'
 UDX_FLAGS    := $(COMMON_FLAGS) -I $(SDK_HOME)/include -Wno-unused-value -shared -fPIC \
@@ -37,12 +37,12 @@ UDX_FLAGS    := $(COMMON_FLAGS) -I $(SDK_HOME)/include -Wno-unused-value -shared
 
 all: $(LIB)
 
-$(LIB): $(UDX_SRC) $(ENGINE_SRC) $(ENGINE_HDR) $(SDK_HOME)/include/Vertica.cpp Makefile
+$(LIB): $(UDX_SRC) $(wildcard src/udx/*.h) $(ENGINE_SRC) $(ENGINE_HDR) $(SDK_HOME)/include/Vertica.cpp Makefile
 	@mkdir -p $(BUILD_DIR)
 	$(CXX) $(UDX_FLAGS) -o $@ $(UDX_SRC) $(ENGINE_SRC) $(SDK_HOME)/include/Vertica.cpp
 
 # Each file in tests/engine is one test program, linked with the engine only.
-$(BUILD_DIR)/tests/%: tests/engine/%.cpp $(ENGINE_SRC) $(ENGINE_HDR) Makefile
+$(BUILD_DIR)/tests/%: tests/engine/%.cpp $(wildcard tests/engine/*.h) $(ENGINE_SRC) $(ENGINE_HDR) Makefile
 	@mkdir -p $(BUILD_DIR)/tests
 	$(CXX) $(COMMON_FLAGS) -o $@ $< $(ENGINE_SRC)
 
