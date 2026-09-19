@@ -25,7 +25,7 @@ It has no Vertica dependency.
 | 12     | uint32    | flags             | bit 0 directed, bit 1 weighted |
 | 16     | uint64    | node_count        | N |
 | 24     | uint64    | edge_count        | E, stored directed edges, duplicates removed |
-| 32     | int64     | max_epoch         | highest Vertica epoch of the journal at build time |
+| 32     | int64     | max_ver           | highest journal version at build time (microseconds for a timestamp column); informational |
 | 40     | uint64    | checksum          | see below |
 | 48     | uint64    | total_bytes       | file size |
 | 56     | uint64    | off_ids           | section offsets from the start of the file |

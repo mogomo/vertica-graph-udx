@@ -55,7 +55,7 @@ int main()
     {
         MappedSnapshot m;
         m.open_active(dir, "g");
-        CHECK(m.snapshot_id() == 1 && m.csr().max_epoch == 77 && m.csr().edge_count == static_cast<std::uint64_t>(n));
+        CHECK(m.snapshot_id() == 1 && m.csr().max_ver == 77 && m.csr().edge_count == static_cast<std::uint64_t>(n));
         CHECK(m.size() == big.buffer.size());
     }
 

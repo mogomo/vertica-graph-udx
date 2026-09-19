@@ -31,15 +31,16 @@ class GPagerank : public TransformFunction
         try {
             QueryGraph q;
             if (!q.read(FN, srvInterface, inputReader, [this]() { return isCanceled(); })) return;
-            const vgraph::CsrGraph graph = q.graph();
-            std::vector<double> rank;
-            vgraph::pagerank(graph, (int)iterations_, damping_, rank);
-            for (vgraph::pos_t p = 0; p < graph.node_count(); ++p) {
-                outputWriter.setInt(0, graph.id_of(p));
-                outputWriter.setFloat(1, rank[p]);
-                outputWriter.next();
-                if ((p & 0xFFFFF) == 0 && isCanceled()) return;
-            }
+            q.run([&](const auto &graph) {
+                std::vector<double> rank;
+                vgraph::pagerank(graph, (int)iterations_, damping_, rank);
+                for (vgraph::pos_t p = 0; p < graph.node_count(); ++p) {
+                    outputWriter.setInt(0, graph.id_of(p));
+                    outputWriter.setFloat(1, rank[p]);
+                    outputWriter.next();
+                    if ((p & 0xFFFFF) == 0 && isCanceled()) return;
+                }
+            });
         } catch (std::exception &e) {
             vt_report_error(0, "%s: %s", FN, e.what());
         }

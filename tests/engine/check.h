@@ -44,12 +44,12 @@ struct TestGraph {
 };
 
 inline void build(TestGraph &t, const std::vector<Edge> &edges, bool directed = true, bool weighted = false,
-                  const std::vector<std::int64_t> &nodes = {}, std::int64_t max_epoch = 0)
+                  const std::vector<std::int64_t> &nodes = {}, std::int64_t max_ver = 0)
 {
     vgraph::GraphBuilder b(directed, weighted);
     for (const Edge &e : edges) b.add_edge(e.src, e.dst, e.w);
     for (std::int64_t id : nodes) b.add_node(id);
-    b.finish(max_epoch, t.buffer);
+    b.finish(max_ver, t.buffer);
     t.csr = vgraph::snapshot_open(t.buffer.data(), t.buffer.size(), true);
 }
 

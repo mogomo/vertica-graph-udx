@@ -1,7 +1,10 @@
 // gbuild: builds a snapshot from consolidated edges and returns it in chunks.
-//   vgraph.gbuild(src, dst, weight, max_epoch USING PARAMETERS graph='g', directed=true)
-//       OVER(ORDER BY src, dst)
-// Output (chunk_no, chunk, node_count, edge_count, max_epoch, format_version).
+//   vgraph.gbuild(src, dst         USING PARAMETERS graph='g', directed=true, max_ver=0) OVER(ORDER BY src, dst)
+//   vgraph.gbuild(src, dst, weight USING PARAMETERS ...)                                 OVER(ORDER BY src, dst)
+// Two signatures, so that an unweighted graph does not pay for a weight column:
+// every input column costs 8 bytes per edge on the way into the function.
+// max_ver is the journal watermark. It is a parameter, not a column, for the same reason.
+// Output (chunk_no, chunk, node_count, edge_count, max_ver, format_version).
 // Thin adapter around src/engine/builder.h.
 #include "Vertica.h"
 #include "../engine/builder.h"
@@ -31,23 +34,21 @@ class GBuild : public TransformFunction
             const bool directed = !params.containsParameter("directed") ||
                                   params.getBoolRef("directed") == vbool_true;
 
-            vgraph::GraphBuilder builder(directed, false);
-            vint max_epoch = 0, rows = 0;
+            const vint max_ver = params.containsParameter("max_ver") ? params.getIntRef("max_ver") : 0;
+            const bool has_weight = inputReader.getNumCols() > 2;
+
+            vgraph::GraphBuilder builder(directed, has_weight);
+            vint rows = 0;
             do {
                 if (inputReader.isNull(0) || inputReader.isNull(1))
                     vt_report_error(0, "%s: graph '%s': src and dst must not be NULL", FN, graph.c_str());
-                float weight = 1.0f;
-                if (!inputReader.isNull(2)) {
-                    builder.enable_weights();
-                    weight = (float)inputReader.getFloatRef(2);
-                }
+                const float weight = (has_weight && !inputReader.isNull(2)) ? (float)inputReader.getFloatRef(2) : 1.0f;
                 builder.add_edge(inputReader.getIntRef(0), inputReader.getIntRef(1), weight);
-                if (!inputReader.isNull(3)) max_epoch = std::max(max_epoch, inputReader.getIntRef(3));
                 if ((++rows & 0xFFFFF) == 0 && isCanceled()) return;
             } while (inputReader.next());
 
             vgraph::SnapshotBuffer buffer;
-            builder.finish(max_epoch, buffer);
+            builder.finish(max_ver, buffer);
             const vgraph::Csr csr = vgraph::snapshot_open(buffer.data(), buffer.size(), false);
 
             const char *bytes = reinterpret_cast<const char *>(buffer.data());
@@ -58,7 +59,7 @@ class GBuild : public TransformFunction
                 outputWriter.getStringRef(1).copy(bytes + off, len);
                 outputWriter.setInt(2, (vint)csr.node_count);
                 outputWriter.setInt(3, (vint)csr.edge_count);
-                outputWriter.setInt(4, csr.max_epoch);
+                outputWriter.setInt(4, csr.max_ver);
                 outputWriter.setInt(5, vgraph::FORMAT_VERSION);
                 outputWriter.next();
                 if (isCanceled()) return;
@@ -71,12 +72,14 @@ class GBuild : public TransformFunction
 
 class GBuildFactory : public TransformFunctionFactory
 {
+protected:
+    virtual bool weighted() const { return false; }
+
     virtual void getPrototype(ServerInterface &srvInterface, ColumnTypes &argTypes, ColumnTypes &returnType)
     {
         argTypes.addInt();
         argTypes.addInt();
-        argTypes.addFloat();
-        argTypes.addInt();
+        if (weighted()) argTypes.addFloat();
         returnType.addInt();
         returnType.addLongVarbinary();
         for (int i = 0; i < 4; ++i) returnType.addInt();
@@ -89,7 +92,7 @@ class GBuildFactory : public TransformFunctionFactory
         outputTypes.addLongVarbinary((int32)vgraph::CHUNK_BYTES, "chunk");
         outputTypes.addInt("node_count");
         outputTypes.addInt("edge_count");
-        outputTypes.addInt("max_epoch");
+        outputTypes.addInt("max_ver");
         outputTypes.addInt("format_version");
     }
 
@@ -97,10 +100,17 @@ class GBuildFactory : public TransformFunctionFactory
     {
         parameterTypes.addVarchar(128, "graph");
         parameterTypes.addBool("directed");
+        parameterTypes.addInt("max_ver");
     }
 
     virtual TransformFunction *createTransformFunction(ServerInterface &srvInterface)
     { return vt_createFuncObject<GBuild>(srvInterface.allocator); }
 };
 
+class GBuildWeightedFactory : public GBuildFactory
+{
+    virtual bool weighted() const { return true; }
+};
+
 RegisterFactory(GBuildFactory);
+RegisterFactory(GBuildWeightedFactory);

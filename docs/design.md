@@ -1,8 +1,6 @@
 # vgraph design notes
 
-Status: the snapshot path exists (M2). The freshness model (journal, delta
-view, overlay, refresh procedures) is the next milestone; this file will be
-completed with it.
+This file explains the decisions. The user's view is in the README.
 
 ## Pieces
 
@@ -55,9 +53,6 @@ that starts there fails with a clear message, and running gload again repairs it
   digits and underscore, so a name cannot point outside cache_dir.
 - Two gload runs for the same graph at the same time are not supported.
 - Directories are created with mode 0700, files with 0600.
-- Stale check: if an input row carries a `snapshot_epoch` higher than the
-  cached file's `max_epoch`, the query fails with
-  "snapshot cache stale on <node>: run gload".
 
 ## Memory
 
@@ -73,10 +68,65 @@ Query functions mmap the snapshot and copy nothing. Working memory per call:
 gkhop 1 byte per node plus the frontier; gpath 4 bytes per node (12 with
 weights); gcomponents 4 bytes per node; gpagerank 24 bytes per node.
 
+## Freshness: exact results between refreshes
+
+The edge table is a journal: rows are only inserted, a delete is a row with the
+delete flag, and the row with the latest version wins. The version is a column
+of the customer's table (insertion time or an increasing INT).
+
+Vertica's `epoch` pseudo-column is deliberately not used: it is not unique, it
+can change, and it cannot be part of a projection ("Column name epoch is reserved").
+
+Every query applies the journal rows that may be newer than the snapshot on top
+of the mapped snapshot (src/engine/delta.h) and runs the algorithm on the result.
+
+- The rows come from the view `<schema>.<graph>_delta`: `ver_col > boundary`
+  plus one sentinel row, because Vertica does not call a transform function on
+  empty input. Every row carries the id of the snapshot the view belongs to.
+- The boundary is a literal, written into the view by refresh_graph, so Vertica
+  can prune partitions and storage containers.
+- Boundary for a timestamp version = database clock at the start of the refresh
+  minus the margin. A row can be missing from the snapshot only if it was
+  committed after the build started reading; its insertion time is then later
+  than that boundary, as long as the margin is longer than the longest write
+  transaction. For an INT version the boundary is the highest version minus
+  the margin.
+- Rows inside the margin are in the snapshot and in the delta. That is
+  harmless: rows are applied in version order and the last op wins, so applying
+  a suffix of the journal again always ends in the same state.
+- An overlay that changes nothing is dropped, and the query runs on the plain
+  snapshot.
+
+Reading the delta, measured on a 100 million row journal with 1000 new rows:
+
+| Journal layout | before mergeout | after new rows were merged into old storage |
+|---|---|---|
+| default encoding | 1 to 3 ms | 12 to 46 ms |
+| `ENCODING RLE` on src | 1 to 3 ms | 5 s |
+| partitioned by version date (any encoding) | 1 to 2 ms | 1 to 2 ms: they are never merged |
+| projection sorted by the version column | | 5 s: the optimizer does not choose it; 10 ms with a table-level `PROJS` hint |
+
+Hence the recommendation to partition the journal by the version date, and the
+warning in `vgraph.status` when the read takes more than 500 ms.
+
+Stale check: snapshot ids come from the sequence `vgraph.snapshot_seq` and never
+repeat. If the id in a node's cache is lower than the id carried by the view
+rows, the query fails with "snapshot cache stale on <node>: run gload". A higher
+id is fine: that happens for a moment during a refresh, when the node is loaded
+but the view still has the older, wider boundary.
+
+Refresh order: boundary -> build -> insert chunks -> gload on all nodes (checked:
+every node that holds probe rows must report `loaded`) -> manifest and view ->
+delete snapshots older than the previous one.
+
+Names: `vgraph.refresh_graph`, because `refresh` is a built-in Vertica function
+name and cannot be used for a procedure.
+
 ## Limits today
 
-- Query functions take the graph either from the cache (`graph` parameter) or
-  from the edge rows of the input (no `graph` parameter), not both. Delta rows
-  on top of a snapshot arrive with the freshness milestone.
+- Without the `graph` parameter a query function builds the graph from its
+  input rows; deleted edges are not accepted there.
+- The build holds all edges in memory. A SQL-assisted build that lets Vertica
+  do the sorting and spilling is planned for graphs that do not fit.
 - gpath with `weighted=true` ignores `max_depth`.
 - All query functions run with `OVER()`: one instance, one node.

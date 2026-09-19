@@ -44,28 +44,29 @@ class GKhop : public TransformFunction
             if (q.requests.empty())
                 vt_report_error(0, "%s: no start node: add a request row or the start parameter", FN);
 
-            const vgraph::CsrGraph graph = q.graph();
-            vgraph::BfsScratch scratch;
-            for (const Request &r : q.requests) {
-                vgraph::pos_t start_pos;
-                if (!graph.find(r.start, start_pos)) {
-                    // Unknown node: it has no edges, so it only reaches itself.
-                    if (!opt_.exact || opt_.depth == 0) {
-                        outputWriter.setInt(0, r.start);
-                        outputWriter.setInt(1, r.start);
-                        outputWriter.setInt(2, 0);
-                        outputWriter.next();
+            q.run([&](const auto &graph) {
+                vgraph::BfsScratch scratch;
+                for (const Request &r : q.requests) {
+                    vgraph::pos_t start_pos;
+                    if (!graph.find(r.start, start_pos)) {
+                        // Unknown node: it has no edges, so it only reaches itself.
+                        if (!opt_.exact || opt_.depth == 0) {
+                            outputWriter.setInt(0, r.start);
+                            outputWriter.setInt(1, r.start);
+                            outputWriter.setInt(2, 0);
+                            outputWriter.next();
+                        }
+                        continue;
                     }
-                    continue;
+                    vgraph::khop(graph, start_pos, opt_, scratch, [&](vgraph::pos_t p, std::int64_t hops) {
+                        outputWriter.setInt(0, r.start);
+                        outputWriter.setInt(1, graph.id_of(p));
+                        outputWriter.setInt(2, hops);
+                        outputWriter.next();
+                    });
+                    if (isCanceled()) return;
                 }
-                vgraph::khop(graph, start_pos, opt_, scratch, [&](vgraph::pos_t p, std::int64_t hops) {
-                    outputWriter.setInt(0, r.start);
-                    outputWriter.setInt(1, graph.id_of(p));
-                    outputWriter.setInt(2, hops);
-                    outputWriter.next();
-                });
-                if (isCanceled()) return;
-            }
+            });
         } catch (std::exception &e) {
             vt_report_error(0, "%s: %s", FN, e.what());
         }

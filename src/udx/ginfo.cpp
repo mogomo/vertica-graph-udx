@@ -1,6 +1,6 @@
 // ginfo: what each node has in its snapshot cache.
 //   vgraph.ginfo([USING PARAMETERS graph='g']) OVER(PARTITION NODES) FROM vgraph.probe
-// Output (node_name, graph, snapshot_id, max_epoch, node_count, edge_count, cache_file, loaded).
+// Output (node_name, graph, snapshot_id, max_ver, node_count, edge_count, cache_file, loaded).
 #include "udx_common.h"
 
 using namespace Vertica;
@@ -29,7 +29,7 @@ class GInfo : public TransformFunction
                     vgraph::MappedSnapshot snap;
                     snap.open_active(cache_dir, graph);
                     outputWriter.setInt(2, snap.snapshot_id());
-                    outputWriter.setInt(3, snap.csr().max_epoch);
+                    outputWriter.setInt(3, snap.csr().max_ver);
                     outputWriter.setInt(4, (vint)snap.csr().node_count);
                     outputWriter.setInt(5, (vint)snap.csr().edge_count);
                     outputWriter.getStringRef(6).copy(snap.path());
@@ -72,7 +72,7 @@ class GInfoFactory : public TransformFunctionFactory
         outputTypes.addVarchar(128, "node_name");
         outputTypes.addVarchar(128, "graph");
         outputTypes.addInt("snapshot_id");
-        outputTypes.addInt("max_epoch");
+        outputTypes.addInt("max_ver");
         outputTypes.addInt("node_count");
         outputTypes.addInt("edge_count");
         outputTypes.addVarchar(1200, "cache_file");

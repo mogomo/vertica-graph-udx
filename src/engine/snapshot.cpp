@@ -76,7 +76,7 @@ Csr snapshot_open(const std::uint8_t *data, std::uint64_t size, bool verify_chec
     Csr c;
     c.node_count = h.node_count;
     c.edge_count = h.edge_count;
-    c.max_epoch = h.max_epoch;
+    c.max_ver = h.max_ver;
     c.directed = (h.flags & FLAG_DIRECTED) != 0;
     c.weighted = (h.flags & FLAG_WEIGHTED) != 0;
     c.ids = reinterpret_cast<const std::int64_t *>(data + h.off_ids);

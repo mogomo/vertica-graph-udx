@@ -79,7 +79,8 @@ or, faster at run time but inside the Vertica process:
     make deploy FENCED=no
 
 Deploy creates the library `vgraph`, the schema `vgraph` with the tables
-`snapshot`, `manifest` and `probe`, the role `vgraph_admin` and the functions.
+`snapshot`, `manifest` and `probe`, the sequence `snapshot_seq`, the role
+`vgraph_admin`, the functions and the stored procedures.
 It can be run again at any time; snapshots and the manifest are kept. The
 message `ROLLBACK 5403: User/role "vgraph_admin" already exists` on a second
 run is expected.
@@ -99,12 +100,18 @@ At the end it prints the version and the mode of every function:
 
     tests/sql/test_snapshot.sh --rows=2000000
 
-This creates schema `GRAPH_DEMO` (it is dropped first; pick another name with
+    tests/sql/test_freshness.sh --rows=2000000
+
+The first one creates schema `GRAPH_DEMO` (it is dropped first; pick another name with
 `--schema=NAME`), builds a snapshot of 2 million edges, loads it on every node
 and checks all query functions against a SQL reference. Use
-`--cache_dir=/some/dir` if `/tmp/vgraph` is not wanted. Expected last line:
+`--cache_dir=/some/dir` if `/tmp/vgraph` is not wanted. Expected last lines:
 
     test_snapshot: OK
+    test_freshness: OK
+
+The second test registers a journal table as a graph, journals 1000 adds and
+1000 deletes and checks that queries stay exact without a refresh.
 
 On a cluster the line `PASS  gload on every node` is the important one: it
 compares the nodes that loaded the cache with the nodes that are UP.

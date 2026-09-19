@@ -40,7 +40,7 @@ public:
 
     // Duplicate edges are stored once (the first weight wins). Self loops are kept.
     // The builder is empty afterwards.
-    void finish(std::int64_t max_epoch, SnapshotBuffer &out);
+    void finish(std::int64_t max_ver, SnapshotBuffer &out);
     const BuildTimings &timings() const { return timings_; }
 
 private:

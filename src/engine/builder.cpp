@@ -74,7 +74,7 @@ double seconds_since(std::chrono::steady_clock::time_point &t)
 }
 } // namespace
 
-void GraphBuilder::finish(std::int64_t max_epoch, SnapshotBuffer &out)
+void GraphBuilder::finish(std::int64_t max_ver, SnapshotBuffer &out)
 {
     auto clock = std::chrono::steady_clock::now();
 
@@ -157,7 +157,7 @@ void GraphBuilder::finish(std::int64_t max_epoch, SnapshotBuffer &out)
     h.flags = (directed_ ? FLAG_DIRECTED : 0u) | (weighted_ ? FLAG_WEIGHTED : 0u);
     h.node_count = n;
     h.edge_count = e;
-    h.max_epoch = max_epoch;
+    h.max_ver = max_ver;
     snapshot_layout(h);
     out.allocate(h.total_bytes);
     std::uint8_t *base = out.data();

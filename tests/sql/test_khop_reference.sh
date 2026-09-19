@@ -49,10 +49,10 @@ for d in $DEPTHS; do
     TEST_SQL+="
 DROP TABLE IF EXISTS got;
 CREATE LOCAL TEMP TABLE got ON COMMIT PRESERVE ROWS AS
-SELECT vgraph.gkhop(start, target, src, dst, op, epoch, snapshot_epoch USING PARAMETERS depth=$d) OVER()
+SELECT vgraph.gkhop(start, target, src, dst, del, weight, ver, snapshot_id USING PARAMETERS depth=$d) OVER()
 FROM (SELECT NULL::INT AS start, NULL::INT AS target, src_id AS src, dst_id AS dst,
-             NULL::INT AS op, NULL::INT AS epoch, NULL::INT AS snapshot_epoch FROM contact
-      UNION ALL SELECT $ROOT, NULL, NULL, NULL, NULL, NULL, NULL) q;
+             NULL::BOOLEAN AS del, NULL::FLOAT AS weight, NULL::INT AS ver, NULL::INT AS snapshot_id FROM contact
+      UNION ALL SELECT $ROOT, NULL, NULL, NULL, NULL, NULL, NULL, NULL) q;
 SELECT 'depth $d: ' || g.nodes || ' nodes, ' || d.differences || ' differences' ||
        CASE WHEN d.differences = 0 AND g.nodes > 0 THEN '  PASS' ELSE '  FAIL' END
 FROM (SELECT COUNT(*) AS nodes FROM got) g

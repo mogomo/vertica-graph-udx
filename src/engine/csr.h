@@ -17,7 +17,7 @@ constexpr pos_t NO_POS = 0xFFFFFFFFu;
 struct Csr {
     std::uint64_t node_count = 0;
     std::uint64_t edge_count = 0;
-    std::int64_t max_epoch = 0;
+    std::int64_t max_ver = 0;
     bool directed = true;           // false: graph is symmetric, in_* point to out_*
     bool weighted = false;
     const std::int64_t *ids = nullptr;          // [N] sorted node ids

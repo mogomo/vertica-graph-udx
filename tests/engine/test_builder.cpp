@@ -30,7 +30,7 @@ int main()
               true, false, {77}, 42);
         CHECK(t.csr.node_count == 6);
         CHECK(t.csr.edge_count == 6);           // duplicate 10->20 stored once
-        CHECK(t.csr.max_epoch == 42);
+        CHECK(t.csr.max_ver == 42);
         CHECK(t.csr.directed && !t.csr.weighted);
         CHECK(out_ids(t, 10) == Ids({20, 30, 9000000000LL}));
         CHECK(in_ids(t, 10) == Ids({-5, 30}));

@@ -22,17 +22,23 @@ CREATE TABLE IF NOT EXISTS vgraph.manifest (
     edge_table        VARCHAR(256) NOT NULL,
     src_col           VARCHAR(128) NOT NULL,
     dst_col           VARCHAR(128) NOT NULL,
-    op_col            VARCHAR(128),
+    op_col            VARCHAR(128),           -- BOOLEAN (true = deleted) or INT (+1 / -1)
     weight_col        VARCHAR(128),
+    ver_col           VARCHAR(128),           -- TIMESTAMP or INT; orders the journal
+    ver_margin        INT,                    -- overlap of the delta, in units of ver (microseconds for timestamps)
     directed          BOOLEAN NOT NULL,
     active_snapshot   INT,
-    active_max_epoch  INT,
+    active_max_ver    INT,
+    delta_from        VARCHAR(64),            -- SQL literal: the delta view reads ver_col > delta_from
     node_count        INT,
     edge_count        INT,
     built_at          TIMESTAMPTZ,
     build_seconds     FLOAT,
     format_version    INT
 ) UNSEGMENTED ALL NODES;
+
+-- Snapshot ids. Never reused, so an old cache file can never pass as a newer snapshot.
+CREATE SEQUENCE IF NOT EXISTS vgraph.snapshot_seq;
 
 -- Rows on every node, so that functions with OVER(PARTITION NODES) run on
 -- every node. It must be segmented: Vertica reads an unsegmented table on one
@@ -56,6 +62,7 @@ CREATE ROLE vgraph_admin;
 -- on the search path.
 CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gversion    AS LANGUAGE 'C++' NAME 'GVersionFactory'    LIBRARY vgraph :fenced;
 CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gbuild      AS LANGUAGE 'C++' NAME 'GBuildFactory'      LIBRARY vgraph :fenced;
+CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gbuild      AS LANGUAGE 'C++' NAME 'GBuildWeightedFactory' LIBRARY vgraph :fenced;
 CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gload       AS LANGUAGE 'C++' NAME 'GLoadFactory'       LIBRARY vgraph :fenced;
 CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gnode       AS LANGUAGE 'C++' NAME 'GNodeFactory'       LIBRARY vgraph :fenced;
 CREATE OR REPLACE TRANSFORM FUNCTION vgraph.ginfo       AS LANGUAGE 'C++' NAME 'GInfoFactory'       LIBRARY vgraph :fenced;
@@ -70,10 +77,15 @@ GRANT SELECT ON vgraph.manifest, vgraph.probe TO PUBLIC;
 GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gversion() TO PUBLIC;
 GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.ginfo() TO PUBLIC;
 GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gnode(INT) TO PUBLIC;
-GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gkhop(INT, INT, INT, INT, INT, INT, INT) TO PUBLIC;
-GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gpath(INT, INT, INT, INT, INT, INT, INT) TO PUBLIC;
-GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gcomponents(INT, INT, INT, INT, INT, INT, INT) TO PUBLIC;
-GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gpagerank(INT, INT, INT, INT, INT, INT, INT) TO PUBLIC;
-GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gbuild(INT, INT, FLOAT, INT) TO vgraph_admin;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gkhop(INT, INT, INT, INT, BOOLEAN, FLOAT, INT, INT) TO PUBLIC;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gpath(INT, INT, INT, INT, BOOLEAN, FLOAT, INT, INT) TO PUBLIC;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gcomponents(INT, INT, INT, INT, BOOLEAN, FLOAT, INT, INT) TO PUBLIC;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gpagerank(INT, INT, INT, INT, BOOLEAN, FLOAT, INT, INT) TO PUBLIC;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gbuild(INT, INT) TO vgraph_admin;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gbuild(INT, INT, FLOAT) TO vgraph_admin;
 GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gload(INT, LONG VARBINARY) TO vgraph_admin;
 GRANT ALL ON vgraph.snapshot, vgraph.manifest TO vgraph_admin;
+GRANT SELECT ON SEQUENCE vgraph.snapshot_seq TO vgraph_admin;
+
+-- Stored procedures: register_graph, refresh, load_all, schedule_refresh, unregister_graph.
+\i sql/procedures.sql

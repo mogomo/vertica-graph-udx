@@ -138,7 +138,12 @@ void MappedSnapshot::open_active(const std::string &cache_dir, const std::string
     std::int64_t id = 0;
     if (!read_active(cache_dir, graph, id))
         throw std::runtime_error("no snapshot cache for graph '" + graph + "' in " + cache_dir + ": run gload");
-    open(snapshot_path(cache_dir, graph, id), false);
+    try {
+        open(snapshot_path(cache_dir, graph, id), false);
+    } catch (const std::runtime_error &e) {
+        throw std::runtime_error(std::string("snapshot cache of graph '") + graph + "' is missing or damaged (" +
+                                 e.what() + "): run gload");
+    }
     snapshot_id_ = id;
 }
 

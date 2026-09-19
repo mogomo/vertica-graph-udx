@@ -27,7 +27,7 @@ struct SnapshotHeader {
     std::uint32_t flags;
     std::uint64_t node_count;
     std::uint64_t edge_count;
-    std::int64_t max_epoch;
+    std::int64_t max_ver;
     std::uint64_t checksum;      // over the whole file, with this field as 0
     std::uint64_t total_bytes;   // multiple of 8
     std::uint64_t off_ids;
