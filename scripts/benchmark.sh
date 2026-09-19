@@ -43,7 +43,7 @@ MAXD=$(echo $DEPTHS | tr ' ' '\n' | sort -n | tail -1)
 RESULTS=$(mktemp)
 trap 'rm -f "$RESULTS"' EXIT
 
-sql() { printf '%s\n%s\n' "$PRE" "$1" | vsql -X -A -t -q -v ON_ERROR_STOP=1; }
+sql() { printf '%s\n%s\n' "$PRE" "$1" | vsql -X -A -t -q -v ON_ERROR_STOP=1 2>&1 | grep -v '^NOTICE\|^CONTEXT'; }
 
 # One refresh. Prints "<label> build_ms load_ms".
 refresh_sql() {   # budget_mb
@@ -72,11 +72,11 @@ SELECT vgraph.gkhop(1, $REST USING PARAMETERS graph='vgbench', depth=$d) OVER() 
 SELECT 'depth $d nodes ' || g.n || ' differences ' || x.n FROM (SELECT COUNT(*) AS n FROM got) g CROSS JOIN
   (SELECT COUNT(*) AS n FROM ((SELECT node, hops FROM got EXCEPT SELECT person_id, lvl - 1 FROM reach WHERE lvl <= $d + 1)
      UNION ALL (SELECT person_id, lvl - 1 FROM reach WHERE lvl <= $d + 1 EXCEPT SELECT node, hops FROM got)) u) x;
-SELECT 'depth $d count_ms ' || MAX(CASE WHEN request_label = 'vgq_count_$d' THEN request_duration_ms END) ||
-       ' khop_ms ' || MAX(CASE WHEN request_label = 'vgq_khop_$d' THEN request_duration_ms END) ||
-       ' sql_ms ' || (SELECT SUM(request_duration_ms) FROM v_monitor.query_requests WHERE session_id = CURRENT_SESSION()
-                      AND request_label LIKE 'g_r1_hop%' AND RIGHT(request_label, 2)::INT <= $d + 1)
-FROM v_monitor.query_requests WHERE session_id = CURRENT_SESSION() AND request_label IN ('vgq_count_$d', 'vgq_khop_$d');"
+SELECT 'depth $d count_ms ' || c.ms || ' khop_ms ' || k.ms || ' sql_ms ' || q.ms
+FROM (SELECT MAX(request_duration_ms) AS ms FROM v_monitor.query_requests WHERE session_id = CURRENT_SESSION() AND request_label = 'vgq_count_$d') c
+CROSS JOIN (SELECT MAX(request_duration_ms) AS ms FROM v_monitor.query_requests WHERE session_id = CURRENT_SESSION() AND request_label = 'vgq_khop_$d') k
+CROSS JOIN (SELECT SUM(request_duration_ms) AS ms FROM v_monitor.query_requests WHERE session_id = CURRENT_SESSION()
+            AND request_label LIKE 'g_r1_hop%' AND RIGHT(request_label, 2)::INT <= $d + 1) q;"
     done
     echo "$s"
 }
@@ -99,7 +99,7 @@ fi
 make >/dev/null
 for mode in $MODES; do
     echo "== mode: $mode"
-    make deploy FENCED=$([ "$mode" = fenced ] && echo yes || echo no) > /dev/null
+    make deploy FENCED=$([ "$mode" = fenced ] && echo yes || echo no) > /dev/null 2>&1
     sql "CALL vgraph.unregister_graph('vgbench');" > /dev/null 2>&1 || true
     sql "CALL vgraph.register_graph('vgbench', '$SCHEMA.contact', 'src_id', 'dst_id', NULL, NULL, TRUE, NULL, NULL);" > /dev/null
     if [ "$STREAMING" = yes ]; then
@@ -110,7 +110,7 @@ for mode in $MODES; do
     echo "$mode memory $out" >> "$RESULTS"
     sql "$(query_sql "$mode")" | grep '^depth' | sed "s/^/$mode /" | tee -a "$RESULTS" | sed 's/^/   /'
 done
-make deploy FENCED=yes > /dev/null
+make deploy FENCED=yes > /dev/null 2>&1
 SIZE=$(sql "SELECT (SUM(LENGTH(chunk)) / 1048576)::INT FROM vgraph.snapshot WHERE graph = 'vgbench' AND snapshot_id = (SELECT active_snapshot FROM vgraph.manifest WHERE graph = 'vgbench');")
 COUNTS=$(sql "SELECT node_count || ' nodes, ' || edge_count || ' edges' FROM vgraph.manifest WHERE graph = 'vgbench';")
 sql "CALL vgraph.unregister_graph('vgbench');" > /dev/null

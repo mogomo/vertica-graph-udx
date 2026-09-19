@@ -301,6 +301,28 @@ consolidate, took 63.7 s in environment A, fenced. Through the delta view with
 For large results use a real one-row table or the delta view as input; `FROM
 dual` costs about 0.2 s more for 5.8 million rows.
 
+### One billion edges
+
+The same data generator with 1,000,000,000 rows: 166.7 million people,
+999,999,977 distinct directed edges. Environment A with 34 GB RAM (a virtual
+machine on a laptop, 8 cores, one node), fenced mode, Vertica's memory
+settings untouched. `refresh_graph` chose the streaming build by itself (the
+in-memory estimate is 24 GB, the default budget 4 GB).
+
+| Step, 1 billion rows                                         | Time |
+|--------------------------------------------------------------|-----:|
+| load the 1 billion rows into Vertica (the demo generator)    | 116 s |
+| `refresh_graph`: streaming build, load, 6.67 GB snapshot file | 17.9 min |
+| gkhop_count depth 9 from person 1 (3.68 million people)      | 0.37 to 0.45 s |
+| gkhop depth 9, all 3.68 million nodes returned               | 1.0 s |
+| gkhop depth 2 (41 people) / depth 3 (240 people)             | 13 ms / 9 ms |
+| gkhop_count depth 12 (159.6 million people, nearly everyone) | 15.1 s |
+| SQL BFS procedure, 9 hops, same result                       | 16.8 s (11.9 s in the generator's own run) |
+
+During the whole run the machine did not swap; the build function itself holds
+8 MB. The first query after the load was as fast as the later ones, because
+the load had just written the file and it was still in the page cache.
+
 Memory: queries map the snapshot file read-only. All concurrent queries share
 one copy in the operating system's page cache, and the file may be larger than
 free memory. Private memory per query: gkhop 1 byte per node, gpath 4,
@@ -330,6 +352,15 @@ live aggregate projection (`LIMIT 1 OVER (PARTITION BY src, dst ORDER BY ts DESC
 that always holds the latest row per edge, and from time to time replace the
 journal by its latest state (create the new table from that projection, swap
 the tables, recreate the projection).
+
+## Scripts
+
+    scripts/demo.sh                        # small end-to-end demo, needs nothing else, cleans up after itself
+    scripts/register.sh --graph=contacts --table=app.contacts --src=src --dst=dst --op=del --ver=ts
+    scripts/refresh.sh --graph=contacts    # also: --load_only, --status, --schedule='0 * * * *'
+    scripts/benchmark.sh --rows=100000000 --streaming      # prints a results table; needs the demo repository
+
+All of them accept `--echo_only` and `--help`.
 
 ## Tests
 
