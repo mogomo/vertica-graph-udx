@@ -1,5 +1,5 @@
 // ginfo: what each node has in its snapshot cache.
-//   ginfo([USING PARAMETERS graph='g']) OVER(PARTITION NODES) FROM vgraph.probe
+//   vgraph.ginfo([USING PARAMETERS graph='g']) OVER(PARTITION NODES) FROM vgraph.probe
 // Output (node_name, graph, snapshot_id, max_epoch, node_count, edge_count, cache_file, loaded).
 #include "udx_common.h"
 

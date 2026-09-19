@@ -1,5 +1,5 @@
 // gbuild: builds a snapshot from consolidated edges and returns it in chunks.
-//   gbuild(src, dst, weight, max_epoch USING PARAMETERS graph='g', directed=true)
+//   vgraph.gbuild(src, dst, weight, max_epoch USING PARAMETERS graph='g', directed=true)
 //       OVER(ORDER BY src, dst)
 // Output (chunk_no, chunk, node_count, edge_count, max_epoch, format_version).
 // Thin adapter around src/engine/builder.h.

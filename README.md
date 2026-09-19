@@ -52,18 +52,18 @@ The examples use a table `graph_demo.contact(src_id INT, dst_id INT)`.
 
     INSERT INTO vgraph.snapshot
     SELECT 'demo', 1, chunk_no, chunk FROM (
-      SELECT gbuild(src, dst, weight, max_epoch
+      SELECT vgraph.gbuild(src, dst, weight, max_epoch
                     USING PARAMETERS graph='demo', directed=true) OVER(ORDER BY src, dst)
       FROM (SELECT src_id AS src, dst_id AS dst, NULL::FLOAT AS weight,
                    (SELECT MAX(epoch) FROM graph_demo.contact) AS max_epoch
             FROM graph_demo.contact) e) b;
     COMMIT;
 
-    SELECT gload(chunk_no, chunk USING PARAMETERS graph='demo', snapshot_id=1)
+    SELECT vgraph.gload(chunk_no, chunk USING PARAMETERS graph='demo', snapshot_id=1)
            OVER(PARTITION NODES)
     FROM vgraph.snapshot WHERE graph = 'demo' AND snapshot_id = 1;
 
-    SELECT ginfo() OVER(PARTITION NODES) FROM vgraph.probe;
+    SELECT vgraph.ginfo() OVER(PARTITION NODES) FROM vgraph.probe;
 
 `directed=true` means every stored row is one directed edge. A table that
 stores both directions of a contact needs nothing else. `directed=false` means
@@ -78,24 +78,27 @@ gload can run again at any time, for example after a node restart.
 
 ### 2. Query
 
+The functions live in schema `vgraph`. Write `vgraph.gkhop(...)`, or run
+`SET SEARCH_PATH TO public, vgraph;` and drop the prefix.
+
 All query functions take the columns `(start, target, src, dst, op, epoch,
 snapshot_epoch)`, all INT. Today only `start` and `target` are used with a
 snapshot; pass NULL for the rest. The functions need at least one input row.
 
     -- everyone within 3 hops of person 1
-    SELECT gkhop(1, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT
+    SELECT vgraph.gkhop(1, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT
                  USING PARAMETERS graph='demo', depth=3) OVER()
     FROM vgraph.probe;
 
     -- shortest path from 1 to 4711
-    SELECT gpath(1, 4711, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT
+    SELECT vgraph.gpath(1, 4711, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT
                  USING PARAMETERS graph='demo') OVER()
     FROM vgraph.probe;
 
-    SELECT gcomponents(NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT
+    SELECT vgraph.gcomponents(NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT
                        USING PARAMETERS graph='demo') OVER() FROM vgraph.probe;
 
-    SELECT gpagerank(NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT
+    SELECT vgraph.gpagerank(NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT
                      USING PARAMETERS graph='demo', iterations=20, damping=0.85) OVER() FROM vgraph.probe;
 
 Several request rows in one call are fine: every row with `start` set is one

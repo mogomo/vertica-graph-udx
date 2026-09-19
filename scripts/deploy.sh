@@ -48,9 +48,9 @@ fi
 "${CMD[@]}"
 
 if [ "$UNDEPLOY" = no ]; then
-    vsql -X -c "SELECT gversion() OVER();"
+    vsql -X -c "SELECT vgraph.gversion() OVER();"
     vsql -X -c "SELECT function_name, is_fenced FROM v_catalog.user_functions
-                WHERE schema_name = 'public' AND function_name ILIKE 'g%'
+                WHERE schema_name = 'vgraph'
                   AND function_name IN ('gversion','gbuild','gload','ginfo','gkhop','gpath','gcomponents','gpagerank')
                 ORDER BY 1;"
 fi

@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS vgraph.manifest (
     format_version    INT
 ) UNSEGMENTED ALL NODES;
 
--- One row, so that ginfo() OVER(PARTITION NODES) has input on every node.
+-- One row, so that vgraph.ginfo() OVER(PARTITION NODES) has input on every node.
 CREATE TABLE IF NOT EXISTS vgraph.probe (one INT NOT NULL) UNSEGMENTED ALL NODES;
 INSERT INTO vgraph.probe SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM vgraph.probe);
 COMMIT;
@@ -44,25 +44,26 @@ COMMIT;
 CREATE ROLE vgraph_admin;
 \set ON_ERROR_STOP on
 
--- Functions.
-CREATE OR REPLACE TRANSFORM FUNCTION gversion    AS LANGUAGE 'C++' NAME 'GVersionFactory'    LIBRARY vgraph :fenced;
-CREATE OR REPLACE TRANSFORM FUNCTION gbuild      AS LANGUAGE 'C++' NAME 'GBuildFactory'      LIBRARY vgraph :fenced;
-CREATE OR REPLACE TRANSFORM FUNCTION gload       AS LANGUAGE 'C++' NAME 'GLoadFactory'       LIBRARY vgraph :fenced;
-CREATE OR REPLACE TRANSFORM FUNCTION ginfo       AS LANGUAGE 'C++' NAME 'GInfoFactory'       LIBRARY vgraph :fenced;
-CREATE OR REPLACE TRANSFORM FUNCTION gkhop       AS LANGUAGE 'C++' NAME 'GKhopFactory'       LIBRARY vgraph :fenced;
-CREATE OR REPLACE TRANSFORM FUNCTION gpath       AS LANGUAGE 'C++' NAME 'GPathFactory'       LIBRARY vgraph :fenced;
-CREATE OR REPLACE TRANSFORM FUNCTION gcomponents AS LANGUAGE 'C++' NAME 'GComponentsFactory' LIBRARY vgraph :fenced;
-CREATE OR REPLACE TRANSFORM FUNCTION gpagerank   AS LANGUAGE 'C++' NAME 'GPagerankFactory'   LIBRARY vgraph :fenced;
+-- Functions live in schema vgraph. Call them as vgraph.gkhop(...) or put vgraph
+-- on the search path.
+CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gversion    AS LANGUAGE 'C++' NAME 'GVersionFactory'    LIBRARY vgraph :fenced;
+CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gbuild      AS LANGUAGE 'C++' NAME 'GBuildFactory'      LIBRARY vgraph :fenced;
+CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gload       AS LANGUAGE 'C++' NAME 'GLoadFactory'       LIBRARY vgraph :fenced;
+CREATE OR REPLACE TRANSFORM FUNCTION vgraph.ginfo       AS LANGUAGE 'C++' NAME 'GInfoFactory'       LIBRARY vgraph :fenced;
+CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gkhop       AS LANGUAGE 'C++' NAME 'GKhopFactory'       LIBRARY vgraph :fenced;
+CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gpath       AS LANGUAGE 'C++' NAME 'GPathFactory'       LIBRARY vgraph :fenced;
+CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gcomponents AS LANGUAGE 'C++' NAME 'GComponentsFactory' LIBRARY vgraph :fenced;
+CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gpagerank   AS LANGUAGE 'C++' NAME 'GPagerankFactory'   LIBRARY vgraph :fenced;
 
 -- Query functions: everyone. Build and load: vgraph_admin only.
 GRANT USAGE ON SCHEMA vgraph TO PUBLIC;
 GRANT SELECT ON vgraph.manifest, vgraph.probe TO PUBLIC;
-GRANT EXECUTE ON TRANSFORM FUNCTION gversion() TO PUBLIC;
-GRANT EXECUTE ON TRANSFORM FUNCTION ginfo() TO PUBLIC;
-GRANT EXECUTE ON TRANSFORM FUNCTION gkhop(INT, INT, INT, INT, INT, INT, INT) TO PUBLIC;
-GRANT EXECUTE ON TRANSFORM FUNCTION gpath(INT, INT, INT, INT, INT, INT, INT) TO PUBLIC;
-GRANT EXECUTE ON TRANSFORM FUNCTION gcomponents(INT, INT, INT, INT, INT, INT, INT) TO PUBLIC;
-GRANT EXECUTE ON TRANSFORM FUNCTION gpagerank(INT, INT, INT, INT, INT, INT, INT) TO PUBLIC;
-GRANT EXECUTE ON TRANSFORM FUNCTION gbuild(INT, INT, FLOAT, INT) TO vgraph_admin;
-GRANT EXECUTE ON TRANSFORM FUNCTION gload(INT, LONG VARBINARY) TO vgraph_admin;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gversion() TO PUBLIC;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.ginfo() TO PUBLIC;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gkhop(INT, INT, INT, INT, INT, INT, INT) TO PUBLIC;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gpath(INT, INT, INT, INT, INT, INT, INT) TO PUBLIC;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gcomponents(INT, INT, INT, INT, INT, INT, INT) TO PUBLIC;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gpagerank(INT, INT, INT, INT, INT, INT, INT) TO PUBLIC;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gbuild(INT, INT, FLOAT, INT) TO vgraph_admin;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gload(INT, LONG VARBINARY) TO vgraph_admin;
 GRANT ALL ON vgraph.snapshot, vgraph.manifest TO vgraph_admin;

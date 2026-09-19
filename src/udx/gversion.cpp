@@ -1,4 +1,4 @@
-// gversion() OVER(): library version, snapshot format version, build flags.
+// vgraph.gversion() OVER(): library version, snapshot format version, build flags.
 // Thin adapter. The values come from src/engine/version.h.
 #include "Vertica.h"
 #include "../engine/version.h"

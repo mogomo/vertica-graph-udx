@@ -68,7 +68,7 @@ expect "gbuild into vgraph.snapshot" "^chunks: [1-9]" "
 DELETE FROM vgraph.snapshot WHERE graph = 'vgtest';
 INSERT INTO vgraph.snapshot
 SELECT 'vgtest', 1, chunk_no, chunk FROM (
-  SELECT gbuild(src, dst, weight, max_epoch USING PARAMETERS graph='vgtest', directed=true) OVER(ORDER BY src, dst)
+  SELECT vgraph.gbuild(src, dst, weight, max_epoch USING PARAMETERS graph='vgtest', directed=true) OVER(ORDER BY src, dst)
   FROM (SELECT src_id AS src, dst_id AS dst, NULL::FLOAT AS weight,
                (SELECT MAX(epoch) FROM GRAPH_DEMO.contact) AS max_epoch
         FROM GRAPH_DEMO.contact) e) b;
@@ -78,12 +78,12 @@ SELECT 'chunks: ' || COUNT(*) FROM vgraph.snapshot WHERE graph = 'vgtest';"
 expect "gload on every node" "^loaded on all nodes" "
 SELECT CASE WHEN l.loaded = u.up THEN 'loaded on all nodes' ELSE 'loaded on ' || l.loaded || ' of ' || u.up || ' nodes' END
 FROM (SELECT COUNT(DISTINCT node_name) AS loaded
-      FROM (SELECT gload(chunk_no, chunk USING PARAMETERS graph='vgtest', snapshot_id=1) OVER(PARTITION NODES)
+      FROM (SELECT vgraph.gload(chunk_no, chunk USING PARAMETERS graph='vgtest', snapshot_id=1) OVER(PARTITION NODES)
             FROM vgraph.snapshot WHERE graph = 'vgtest' AND snapshot_id = 1) g WHERE status = 'loaded') l
 CROSS JOIN (SELECT COUNT(*) AS up FROM nodes WHERE node_state = 'UP') u;"
 
 expect "gload again (idempotent)" "^loaded$" "
-SELECT DISTINCT status FROM (SELECT gload(chunk_no, chunk USING PARAMETERS graph='vgtest', snapshot_id=1) OVER(PARTITION NODES)
+SELECT DISTINCT status FROM (SELECT vgraph.gload(chunk_no, chunk USING PARAMETERS graph='vgtest', snapshot_id=1) OVER(PARTITION NODES)
       FROM vgraph.snapshot WHERE graph = 'vgtest' AND snapshot_id = 1) l;"
 
 expect "ginfo: counts and epoch match the table on every node" "^ginfo ok" "
@@ -93,7 +93,7 @@ SELECT CASE WHEN i.nodes_reporting = u.up AND i.min_edges = t.edges AND i.max_ed
                  i.min_edges || '..' || i.max_edges || ' vs ' || t.edges END
 FROM (SELECT COUNT(DISTINCT node_name) AS nodes_reporting, MIN(edge_count) AS min_edges, MAX(edge_count) AS max_edges,
              MIN(max_epoch) AS min_epoch, MIN(loaded::INT) AS all_loaded
-      FROM (SELECT ginfo(USING PARAMETERS graph='vgtest') OVER(PARTITION NODES) FROM vgraph.probe) g) i
+      FROM (SELECT vgraph.ginfo(USING PARAMETERS graph='vgtest') OVER(PARTITION NODES) FROM vgraph.probe) g) i
 CROSS JOIN (SELECT COUNT(*) AS up FROM nodes WHERE node_state = 'UP') u
 CROSS JOIN (SELECT COUNT(*) AS edges FROM (SELECT DISTINCT src_id, dst_id FROM GRAPH_DEMO.contact) d) t
 CROSS JOIN (SELECT MAX(epoch) AS max_epoch FROM GRAPH_DEMO.contact) ep;"
@@ -108,7 +108,7 @@ for d in 1 3 6 9; do
 KHOP+="
 DROP TABLE IF EXISTS got;
 CREATE LOCAL TEMP TABLE got ON COMMIT PRESERVE ROWS AS
-SELECT gkhop(1, $NULLS6 USING PARAMETERS graph='vgtest', depth=$d) OVER() FROM vgraph.probe;
+SELECT vgraph.gkhop(1, $NULLS6 USING PARAMETERS graph='vgtest', depth=$d) OVER() FROM vgraph.probe;
 SELECT 'depth $d: ' || g.nodes || ' nodes, ' || d.differences || ' differences' ||
        CASE WHEN d.differences = 0 AND g.nodes > 0 THEN ' ok' ELSE ' WRONG' END
 FROM (SELECT COUNT(*) AS nodes FROM got) g
@@ -121,7 +121,7 @@ done
 KHOP+="
 DROP TABLE IF EXISTS got;
 CREATE LOCAL TEMP TABLE got ON COMMIT PRESERVE ROWS AS
-SELECT gkhop(NULL::INT, $NULLS6 USING PARAMETERS graph='vgtest', depth=6, exact=true, start=1) OVER() FROM vgraph.probe;
+SELECT vgraph.gkhop(NULL::INT, $NULLS6 USING PARAMETERS graph='vgtest', depth=6, exact=true, start=1) OVER() FROM vgraph.probe;
 SELECT 'exact: ' || COUNT(*) || ' differences' || CASE WHEN COUNT(*) = 0 THEN ' ok' ELSE ' WRONG' END
 FROM ((SELECT node FROM got EXCEPT SELECT person_id FROM reach WHERE lvl = 7)
       UNION ALL (SELECT person_id FROM reach WHERE lvl = 7 EXCEPT SELECT node FROM got)) x;
@@ -129,7 +129,7 @@ FROM ((SELECT node FROM got EXCEPT SELECT person_id FROM reach WHERE lvl = 7)
 -- gpath to a person at level 7: 7 rows, from 1 to the target, every step is a stored contact.
 DROP TABLE IF EXISTS path;
 CREATE LOCAL TEMP TABLE path ON COMMIT PRESERVE ROWS AS
-SELECT gpath(1, t.target, $NULLS5 USING PARAMETERS graph='vgtest') OVER()
+SELECT vgraph.gpath(1, t.target, $NULLS5 USING PARAMETERS graph='vgtest') OVER()
 FROM (SELECT MIN(person_id) AS target FROM reach WHERE lvl = 7) t;
 SELECT 'gpath: ' || COUNT(*) || ' rows, ' || SUM(CASE WHEN c.src_id IS NULL AND p.hop_no > 0 THEN 1 ELSE 0 END) || ' broken steps' ||
        CASE WHEN COUNT(*) = 7 AND MIN(p.node) = 1 AND SUM(CASE WHEN c.src_id IS NULL AND p.hop_no > 0 THEN 1 ELSE 0 END) = 0
@@ -149,12 +149,12 @@ fi
 echo "== gcomponents and gpagerank"
 expect "gcomponents: one row per node, no edge crosses components, component = smallest id" "^components ok" "
 CREATE LOCAL TEMP TABLE comp ON COMMIT PRESERVE ROWS AS
-SELECT gcomponents(NULL::INT, $NULLS6 USING PARAMETERS graph='vgtest') OVER() FROM vgraph.probe;
+SELECT vgraph.gcomponents(NULL::INT, $NULLS6 USING PARAMETERS graph='vgtest') OVER() FROM vgraph.probe;
 SELECT CASE WHEN n.nodes = i.node_count AND x.crossing = 0 AND m.wrong_name = 0
             THEN 'components ok' ELSE 'components WRONG: ' || n.nodes || '/' || i.node_count || ' nodes, ' ||
                  x.crossing || ' crossing edges, ' || m.wrong_name || ' wrong names' END
 FROM (SELECT COUNT(*) AS nodes FROM comp) n
-CROSS JOIN (SELECT MAX(node_count) AS node_count FROM (SELECT ginfo(USING PARAMETERS graph='vgtest') OVER(PARTITION NODES) FROM vgraph.probe) g) i
+CROSS JOIN (SELECT MAX(node_count) AS node_count FROM (SELECT vgraph.ginfo(USING PARAMETERS graph='vgtest') OVER(PARTITION NODES) FROM vgraph.probe) g) i
 CROSS JOIN (SELECT COUNT(*) AS crossing FROM GRAPH_DEMO.contact e JOIN comp a ON a.node = e.src_id JOIN comp b ON b.node = e.dst_id
             WHERE a.component <> b.component) x
 CROSS JOIN (SELECT COUNT(*) AS wrong_name FROM (SELECT component, MIN(node) AS smallest FROM comp GROUP BY 1) s
@@ -163,27 +163,27 @@ CROSS JOIN (SELECT COUNT(*) AS wrong_name FROM (SELECT component, MIN(node) AS s
 expect "gpagerank: one row per node, ranks sum to 1" "^pagerank ok" "
 SELECT CASE WHEN COUNT(*) = MAX(i.node_count) AND ABS(SUM(rank) - 1) < 1e-6 AND MIN(rank) > 0
             THEN 'pagerank ok' ELSE 'pagerank WRONG: ' || COUNT(*) || ' rows, sum ' || SUM(rank) END
-FROM (SELECT gpagerank(NULL::INT, $NULLS6 USING PARAMETERS graph='vgtest', iterations=10) OVER() FROM vgraph.probe) r
-CROSS JOIN (SELECT MAX(node_count) AS node_count FROM (SELECT ginfo(USING PARAMETERS graph='vgtest') OVER(PARTITION NODES) FROM vgraph.probe) g) i;"
+FROM (SELECT vgraph.gpagerank(NULL::INT, $NULLS6 USING PARAMETERS graph='vgtest', iterations=10) OVER() FROM vgraph.probe) r
+CROSS JOIN (SELECT MAX(node_count) AS node_count FROM (SELECT vgraph.ginfo(USING PARAMETERS graph='vgtest') OVER(PARTITION NODES) FROM vgraph.probe) g) i;"
 
 echo "== cache rules"
 expect "session parameter cache_dir is used" "no snapshot cache for graph 'vgtest' in /tmp/vgraph_not_there" "
 ALTER SESSION SET UDPARAMETER FOR vgraph cache_dir = '/tmp/vgraph_not_there';
-SELECT gkhop(1, $NULLS6 USING PARAMETERS graph='vgtest', depth=1) OVER() FROM vgraph.probe;"
+SELECT vgraph.gkhop(1, $NULLS6 USING PARAMETERS graph='vgtest', depth=1) OVER() FROM vgraph.probe;"
 
 expect "function parameter cache_dir wins over the session parameter" "^found [1-9]" "
 ALTER SESSION SET UDPARAMETER FOR vgraph cache_dir = '/tmp/vgraph_not_there';
-SELECT 'found ' || COUNT(*) FROM (SELECT gkhop(1, $NULLS6 USING PARAMETERS graph='vgtest', depth=1, cache_dir='/tmp/vgraph') OVER() FROM vgraph.probe) r;"
+SELECT 'found ' || COUNT(*) FROM (SELECT vgraph.gkhop(1, $NULLS6 USING PARAMETERS graph='vgtest', depth=1, cache_dir='/tmp/vgraph') OVER() FROM vgraph.probe) r;"
 
 expect "stale cache is refused" "snapshot cache stale on .*: run gload" "
-SELECT gkhop(1, $NULLS5, e.newer USING PARAMETERS graph='vgtest', depth=1) OVER()
+SELECT vgraph.gkhop(1, $NULLS5, e.newer USING PARAMETERS graph='vgtest', depth=1) OVER()
 FROM (SELECT MAX(epoch) + 1000000 AS newer FROM GRAPH_DEMO.contact) e;"
 
 expect "unknown graph is refused" "no snapshot cache for graph 'vgtest_none'" "
-SELECT gkhop(1, $NULLS6 USING PARAMETERS graph='vgtest_none', depth=1) OVER() FROM vgraph.probe;"
+SELECT vgraph.gkhop(1, $NULLS6 USING PARAMETERS graph='vgtest_none', depth=1) OVER() FROM vgraph.probe;"
 
 expect "bad graph name is refused" "is not valid" "
-SELECT gkhop(1, $NULLS6 USING PARAMETERS graph='../etc', depth=1) OVER() FROM vgraph.probe;"
+SELECT vgraph.gkhop(1, $NULLS6 USING PARAMETERS graph='../etc', depth=1) OVER() FROM vgraph.probe;"
 
 run_sql "cleanup" "DELETE FROM vgraph.snapshot WHERE graph = 'vgtest'; COMMIT;" > /dev/null
 

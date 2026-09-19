@@ -1,5 +1,5 @@
 // gload: writes the snapshot cache file on every node and makes it active.
-//   gload(chunk_no, chunk USING PARAMETERS graph='g', snapshot_id=7) OVER(PARTITION NODES)
+//   vgraph.gload(chunk_no, chunk USING PARAMETERS graph='g', snapshot_id=7) OVER(PARTITION NODES)
 // Output (node_name, snapshot_id, bytes, status). Idempotent: run it again any time.
 // Thin adapter around src/engine/cache.h.
 #include "udx_common.h"

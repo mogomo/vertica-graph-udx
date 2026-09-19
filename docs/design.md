@@ -1,8 +1,8 @@
 # vgraph design notes
 
 Status: the snapshot path exists (M2). The freshness model (journal, delta
-view, overlay, refresh procedures) is the next milestone;
-this file will be completed with it.
+view, overlay, refresh procedures) is the next milestone; this file will be
+completed with it.
 
 ## Pieces
 
@@ -17,7 +17,7 @@ this file will be completed with it.
 
 ## gload and PARTITION NODES
 
-`gload(...) OVER(PARTITION NODES)` runs one function instance on every node.
+`vgraph.gload(...) OVER(PARTITION NODES)` runs one function instance on every node.
 Because `vgraph.snapshot` is unsegmented, each instance reads all chunks from
 its local copy and writes its own cache file.
 

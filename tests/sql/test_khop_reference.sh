@@ -47,7 +47,7 @@ for d in $DEPTHS; do
     TEST_SQL+="
 DROP TABLE IF EXISTS got;
 CREATE LOCAL TEMP TABLE got ON COMMIT PRESERVE ROWS AS
-SELECT gkhop(start, target, src, dst, op, epoch, snapshot_epoch USING PARAMETERS depth=$d) OVER()
+SELECT vgraph.gkhop(start, target, src, dst, op, epoch, snapshot_epoch USING PARAMETERS depth=$d) OVER()
 FROM (SELECT NULL::INT AS start, NULL::INT AS target, src_id AS src, dst_id AS dst,
              NULL::INT AS op, NULL::INT AS epoch, NULL::INT AS snapshot_epoch FROM contact
       UNION ALL SELECT $ROOT, NULL, NULL, NULL, NULL, NULL, NULL) q;
