@@ -15,23 +15,31 @@ completed with it.
   replicated with the database. The cache file is only a copy of it.
 - A missing or damaged cache file is never a data loss: run gload again.
 
-## gload and PARTITION NODES
+## gload on every node
 
 `gload(...) OVER(PARTITION NODES)` runs one function instance on every node
-that receives input rows.
+that receives input rows. Measured on Vertica 26.2:
 
-Measured (Vertica 26.2):
+- With `vgraph.snapshot` (unsegmented) as the only input, Vertica reads the
+  replicated table on one node only. On a 3-node Eon cluster only one node ran
+  gload. On a single node this cannot be seen.
+- So the input is driven by a segmented table. `vgraph.probe(k)` holds 1024
+  rows, segmented by hash, so every node has some. `vgraph.gnode(k)
+  OVER(PARTITION NODES)` returns the smallest k stored on each node. The chunks
+  are cross joined to those probe rows: one probe row per node, so every node
+  gets every chunk exactly once. The join is local because the snapshot table
+  is replicated.
+- The mapping is computed inside the same statement, so it follows node and
+  shard changes. gload returns one row per node that loaded.
+- ginfo reads `vgraph.probe` for the same reason and answers once per node.
 
-- Single node: works as written, the node loads all chunks.
-- Eon, 3 nodes: with `vgraph.snapshot` (unsegmented) as the only input, Vertica
-  reads the replicated table on one node only, so only that node runs gload.
-  The same is true for ginfo over the unsegmented `vgraph.probe`.
-- Eon, 3 nodes: when the chunks are joined to a segmented table that has
-  exactly one row on every node, every node runs gload and gets all chunks.
+Tested on a single node (aarch64) and on a 3-node Eon cluster (x86_64).
+`tests/sql/test_snapshot.sh` fails if the number of nodes that report `loaded`
+differs from the number of UP nodes.
 
-The mechanism for multi-node clusters is therefore still open. The test
-`tests/sql/test_snapshot.sh` compares the number of nodes that report `loaded`
-with the number of UP nodes, so it fails on a cluster until this is settled.
+Eon note: a statement runs on the nodes that take part in the session. A node
+that did not take part (for example one added later) has no cache file. A query
+that starts there fails with a clear message, and running gload again repairs it.
 
 ## Cache rules
 

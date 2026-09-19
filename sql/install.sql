@@ -34,9 +34,17 @@ CREATE TABLE IF NOT EXISTS vgraph.manifest (
     format_version    INT
 ) UNSEGMENTED ALL NODES;
 
--- One row, so that vgraph.ginfo() OVER(PARTITION NODES) has input on every node.
-CREATE TABLE IF NOT EXISTS vgraph.probe (one INT NOT NULL) UNSEGMENTED ALL NODES;
-INSERT INTO vgraph.probe SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM vgraph.probe);
+-- Rows on every node, so that functions with OVER(PARTITION NODES) run on
+-- every node. It must be segmented: Vertica reads an unsegmented table on one
+-- node only. An older one-row probe table is replaced.
+\set ON_ERROR_STOP off
+DROP TABLE IF EXISTS vgraph.probe CASCADE;
+\set ON_ERROR_STOP on
+CREATE TABLE vgraph.probe (k INT NOT NULL) SEGMENTED BY HASH(k) ALL NODES;
+INSERT INTO vgraph.probe
+SELECT ROW_NUMBER() OVER()
+FROM (SELECT 1 FROM (SELECT '2000-01-01 00:00:00'::TIMESTAMP AS t UNION ALL SELECT '2000-01-01 00:17:03'::TIMESTAMP) b
+      TIMESERIES ts AS '1 second' OVER (ORDER BY t)) g;
 COMMIT;
 
 -- CREATE ROLE has no IF NOT EXISTS: on a second install the error is expected.
@@ -49,6 +57,7 @@ CREATE ROLE vgraph_admin;
 CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gversion    AS LANGUAGE 'C++' NAME 'GVersionFactory'    LIBRARY vgraph :fenced;
 CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gbuild      AS LANGUAGE 'C++' NAME 'GBuildFactory'      LIBRARY vgraph :fenced;
 CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gload       AS LANGUAGE 'C++' NAME 'GLoadFactory'       LIBRARY vgraph :fenced;
+CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gnode       AS LANGUAGE 'C++' NAME 'GNodeFactory'       LIBRARY vgraph :fenced;
 CREATE OR REPLACE TRANSFORM FUNCTION vgraph.ginfo       AS LANGUAGE 'C++' NAME 'GInfoFactory'       LIBRARY vgraph :fenced;
 CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gkhop       AS LANGUAGE 'C++' NAME 'GKhopFactory'       LIBRARY vgraph :fenced;
 CREATE OR REPLACE TRANSFORM FUNCTION vgraph.gpath       AS LANGUAGE 'C++' NAME 'GPathFactory'       LIBRARY vgraph :fenced;
@@ -60,6 +69,7 @@ GRANT USAGE ON SCHEMA vgraph TO PUBLIC;
 GRANT SELECT ON vgraph.manifest, vgraph.probe TO PUBLIC;
 GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gversion() TO PUBLIC;
 GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.ginfo() TO PUBLIC;
+GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gnode(INT) TO PUBLIC;
 GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gkhop(INT, INT, INT, INT, INT, INT, INT) TO PUBLIC;
 GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gpath(INT, INT, INT, INT, INT, INT, INT) TO PUBLIC;
 GRANT EXECUTE ON TRANSFORM FUNCTION vgraph.gcomponents(INT, INT, INT, INT, INT, INT, INT) TO PUBLIC;

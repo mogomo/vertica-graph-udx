@@ -13,6 +13,7 @@ view, procedures) are the next milestone. Until then you rebuild by hand.
 | `gbuild`      | build a snapshot (CSR index) from an edge table | works  |
 | `gload`       | write the snapshot cache file on every node     | works  |
 | `ginfo`       | what each node has cached                       | works  |
+| `gnode`       | helper: one probe row per node, used with gload | works  |
 | `gkhop`       | k-hop neighbourhood (BFS)                       | works  |
 | `gpath`       | shortest path, by hops or by weight             | works  |
 | `gcomponents` | connected components                            | works  |
@@ -23,9 +24,14 @@ view, procedures) are the next milestone. Until then you rebuild by hand.
 
 - Vertica 26.x with the C++ SDK in `/opt/vertica/sdk`.
 - g++ with C++17 support and GNU make, on a Vertica node.
-- Builds on aarch64 and x86_64. Tested on Rocky Linux 9, aarch64, g++ 11.5.
+- Builds on x86_64 and aarch64. Tested on RHEL 8.10 x86_64 with g++ 8.5 (3-node
+  Eon cluster) and on Rocky Linux 9 aarch64 with g++ 11.5 (single node).
+- Works on single-node and multi-node databases.
 
 ## Install
+
+Step by step, with versions and expected output: [docs/build-x86.md](docs/build-x86.md).
+Short form:
 
 Run on a Vertica node, as a user who may create libraries:
 
@@ -61,7 +67,11 @@ The examples use a table `graph_demo.contact(src_id INT, dst_id INT)`.
 
     SELECT vgraph.gload(chunk_no, chunk USING PARAMETERS graph='demo', snapshot_id=1)
            OVER(PARTITION NODES)
-    FROM vgraph.snapshot WHERE graph = 'demo' AND snapshot_id = 1;
+    FROM (SELECT s.chunk_no, s.chunk
+          FROM vgraph.snapshot s CROSS JOIN vgraph.probe p
+          WHERE s.graph = 'demo' AND s.snapshot_id = 1
+            AND p.k IN (SELECT k FROM (SELECT vgraph.gnode(k) OVER(PARTITION NODES)
+                                       FROM vgraph.probe) n)) c;
 
     SELECT vgraph.ginfo() OVER(PARTITION NODES) FROM vgraph.probe;
 
@@ -73,6 +83,12 @@ The cache file goes to `/tmp/vgraph/<graph>/`. Change it per call with the
 parameter `cache_dir`, or per session:
 
     ALTER SESSION SET UDPARAMETER FOR vgraph cache_dir = '/data/vgraph';
+
+gload returns one row per node. It works the same on one node and on a
+cluster: `vgraph.probe` is a small segmented table with rows on every node,
+`vgraph.gnode` picks one of its rows per node, and the join gives every node
+one full copy of the chunks. (Reading `vgraph.snapshot` alone would load one
+node only, because Vertica reads an unsegmented table on a single node.)
 
 gload can run again at any time, for example after a node restart.
 
@@ -88,18 +104,18 @@ snapshot; pass NULL for the rest. The functions need at least one input row.
     -- everyone within 3 hops of person 1
     SELECT vgraph.gkhop(1, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT
                  USING PARAMETERS graph='demo', depth=3) OVER()
-    FROM vgraph.probe;
+    FROM dual;
 
     -- shortest path from 1 to 4711
     SELECT vgraph.gpath(1, 4711, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT
                  USING PARAMETERS graph='demo') OVER()
-    FROM vgraph.probe;
+    FROM dual;
 
     SELECT vgraph.gcomponents(NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT
-                       USING PARAMETERS graph='demo') OVER() FROM vgraph.probe;
+                       USING PARAMETERS graph='demo') OVER() FROM dual;
 
     SELECT vgraph.gpagerank(NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT, NULL::INT
-                     USING PARAMETERS graph='demo', iterations=20, damping=0.85) OVER() FROM vgraph.probe;
+                     USING PARAMETERS graph='demo', iterations=20, damping=0.85) OVER() FROM dual;
 
 Several request rows in one call are fine: every row with `start` set is one
 request.
