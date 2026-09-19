@@ -24,7 +24,7 @@ Works on single-node and multi-node databases (tested: one node on aarch64,
 | `vgraph.status`             | size and read time of the pending changes |
 | `vgraph.unregister_graph`   | remove a graph |
 | `vgraph.ginfo`, `vgraph.gversion` | what every node has cached; library version |
-| `vgraph.gbuild`, `vgraph.gload`, `vgraph.gnode` | building blocks used by the procedures |
+| `vgraph.gbuild`, `vgraph.gbuild_mapped`, `vgraph.gbuild_header`, `vgraph.gload`, `vgraph.gnode` | building blocks used by the procedures |
 
 ## Requirements
 
@@ -159,6 +159,30 @@ directory can be set per session:
 
     ALTER SESSION SET UDPARAMETER FOR vgraph cache_dir = '/data/vgraph';
 
+### Large graphs: the streaming build
+
+`refresh_graph` builds the snapshot in one of two ways and writes the same
+file, byte for byte, either way:
+
+- **In memory** (`gbuild`): fastest. The function holds all edges: about 16
+  bytes per edge row plus 32 per node, outside Vertica's resource pools.
+- **Streaming** (`gbuild_mapped`): Vertica builds a node map and the mapped,
+  sorted edges in tables, which spill to disk under its own memory management.
+  The function writes the file section by section and needs one 8 MB buffer,
+  whatever the graph size. About 4 times slower at 100 million rows (82 s
+  against 21 s for the whole refresh).
+
+The choice is automatic: rows x 24 bytes is compared with
+`vgraph.manifest.build_memory_mb` (default 4096).
+
+    UPDATE vgraph.manifest SET build_memory_mb = 16384 WHERE graph = 'contacts';   -- allow 16 GB in memory
+    UPDATE vgraph.manifest SET build_memory_mb = 0     WHERE graph = 'contacts';   -- always stream
+    COMMIT;
+
+The streaming build creates and drops the tables `vgraph.build_<graph>_map`
+and `vgraph.build_<graph>_edges`. It needs disk space for one copy of the
+consolidated edges and for Vertica's sort.
+
 A missing or stale cache file is never a data loss. The query says
 `run gload`; `CALL vgraph.load_all('contacts')` repairs it, for example after
 a node was added or a pod restarted.
@@ -280,8 +304,8 @@ dual` costs about 0.2 s more for 5.8 million rows.
 Memory: queries map the snapshot file read-only. All concurrent queries share
 one copy in the operating system's page cache, and the file may be larger than
 free memory. Private memory per query: gkhop 1 byte per node, gpath 4,
-gcomponents 8, gpagerank 24. The build holds about 16 bytes per edge plus 32
-per node in the UDx process; see docs/design.md.
+gcomponents 8, gpagerank 24. The in-memory build holds about 16 bytes per edge
+plus 32 per node in the UDx process; the streaming build holds 8 MB.
 
 ## Possible later: a changes table
 
@@ -314,6 +338,7 @@ the tables, recreate the projection).
     tests/sql/test_khop_reference.sh       # gkhop without snapshot against the BFS procedure of the demo repository
     tests/sql/test_snapshot.sh             # build, load on every node, all query functions, cache rules
     tests/sql/test_freshness.sh            # journal, exactness without refresh, refresh, repair, schedule
+    tests/sql/test_build_paths.sh          # in-memory and streaming build write identical files
 
 The integration tests need https://github.com/mogomo/vertica-graphs-and-trees
 cloned as a sibling directory. They drop and recreate schema `GRAPH_DEMO`

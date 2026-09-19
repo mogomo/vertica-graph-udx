@@ -101,6 +101,7 @@ At the end it prints the version and the mode of every function:
     tests/sql/test_snapshot.sh --rows=2000000
 
     tests/sql/test_freshness.sh --rows=2000000
+    tests/sql/test_build_paths.sh --keep
 
 The first one creates schema `GRAPH_DEMO` (it is dropped first; pick another name with
 `--schema=NAME`), builds a snapshot of 2 million edges, loads it on every node
@@ -109,6 +110,7 @@ and checks all query functions against a SQL reference. Use
 
     test_snapshot: OK
     test_freshness: OK
+    test_build_paths: OK
 
 The second test registers a journal table as a graph, journals 1000 adds and
 1000 deletes and checks that queries stay exact without a refresh.

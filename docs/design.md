@@ -138,11 +138,40 @@ delete snapshots older than the previous one.
 Names: `vgraph.refresh_graph`, because `refresh` is a built-in Vertica function
 name and cannot be used for a procedure.
 
+## Two build paths, one file
+
+The in-memory builder (src/engine/builder.cpp) needs all edges at once: the
+sorted node ids, the degrees and the edges grouped by target are only known
+when the last row has arrived, and a transform function sees its input once.
+
+The streaming build moves that work into Vertica, which sorts and spills under
+its own memory management:
+
+1. consolidated edges into a table, once;
+2. node map: `id, ROW_NUMBER() OVER(ORDER BY id) - 1 AS pos` over the distinct ids;
+3. edges as positions, unique, stored sorted by (s, d); both directions for an
+   undirected graph;
+4. counts; and the test whether the in lists equal the out lists: first an
+   order-independent hash sum over (s, d) and (d, s), and only if they are
+   equal the exact anti join;
+5. one statement per section feeds `gbuild_mapped` with a sorted stream
+   (src/engine/section_writer.h). It validates the stream (order, uniqueness,
+   ranges, totals) and keeps one 8 MB piece in memory;
+6. `gbuild_header` reads the checksum parts of the sections and writes the header.
+
+The sections do not depend on each other, so they could run at the same time
+and on different nodes later.
+
+The combinable checksum (docs/format.md) and pieces addressed by byte offset
+make this possible. Both paths must give the same bytes: tests/engine/
+test_section_writer.cpp checks it without Vertica, tests/sql/test_build_paths.sh
+with Vertica, for graphs stored both ways, one way, undirected, and weighted
+journals with deletes. Measured at 100 million rows: whole refresh 21 s in
+memory, 82 s streaming, identical 667 MB file.
+
 ## Limits today
 
 - Without the `graph` parameter a query function builds the graph from its
   input rows; deleted edges are not accepted there.
-- The build holds all edges in memory. A SQL-assisted build that lets Vertica
-  do the sorting and spilling is planned for graphs that do not fit.
 - gpath with `weighted=true` ignores `max_depth`.
 - All query functions run with `OVER()`: one instance, one node.

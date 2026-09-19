@@ -70,21 +70,34 @@ the first one wins.
 
 ## Checksum
 
-64-bit, over the whole file taken as little-endian 8-byte words, with the
-checksum field itself counted as 0:
+64-bit. The file is taken as little-endian 8-byte words; word i is at byte
+offset 8 * i. The checksum is the XOR of one value per non-zero word, mixed
+with the word's position (splitmix64 finalizer). The checksum field itself and
+all zero words contribute nothing:
 
-    h = 0xcbf29ce484222325
-    for each word w:  h = (h XOR w) * 0x100000001b3;  h = h XOR (h >> 29)
+    sum = 0
+    for each word w at index i, w != 0, i != 5:
+        z = w + (i + 1) * 0x9E3779B97F4A7C15
+        z = (z XOR (z >> 30)) * 0xBF58476D1CE4E5B9
+        z = (z XOR (z >> 27)) * 0x94D049BB133111EB
+        sum = sum XOR z XOR (z >> 31)
+
+Because it is an XOR over positions, the checksum of a file is the XOR of the
+checksums of its parts, in any order. The streaming build uses this: every
+section is written by its own statement, and the header is made last from the
+sections' parts. A missing piece reads as zeros and changes the sum.
 
 `gload` verifies it before a file becomes active. Query functions do not
 (it would read the whole file on every query). They check the magic, the
 version, the size, the section offsets and the first and last CSR offset.
 
-## Chunks
+## Pieces
 
-`gbuild` returns the bytes in chunks of 8 MB (8388608 bytes), numbered from 0.
-Only the last chunk is shorter. `gload` writes chunk k at file offset k * 8 MB,
-so chunks may arrive in any order.
+`vgraph.snapshot` holds the file as pieces `(byte_offset, chunk)` of at most
+8 MB (8388608 bytes). `gload` writes every piece at its offset, so pieces may
+arrive in any order; together they must cover the file exactly once.
+`gbuild` cuts the file every 8 MB. `gbuild_mapped` cuts every section
+separately, and `gbuild_header` adds the 128 header bytes at offset 0.
 
 ## Size
 
