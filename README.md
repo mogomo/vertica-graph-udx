@@ -476,6 +476,7 @@ cloned as a sibling directory. They drop and recreate schema `GRAPH_DEMO`
 - Big-endian hosts.
 
 More detail: [docs/design.md](docs/design.md), [docs/format.md](docs/format.md).
+The story, the comparison with Neo4j and the pictures: [blog/README.md](blog/README.md).
 
 ## License
 
