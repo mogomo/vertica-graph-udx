@@ -174,6 +174,27 @@ SELECT CASE WHEN COUNT(*) = MAX(i.node_count) AND ABS(SUM(rank) - 1) < 1e-6 AND 
 FROM (SELECT vgraph.gpagerank(NULL::INT, $REST_AFTER_START USING PARAMETERS graph='vgtest'$CD, iterations=10) OVER() FROM dual) r
 CROSS JOIN (SELECT MAX(node_count) AS node_count FROM (SELECT vgraph.ginfo(USING PARAMETERS graph='vgtest'$CD) OVER(PARTITION NODES) FROM vgraph.probe) g) i;"
 
+expect "gcomponents_count: the same components, one row each; one thread and four give the same" "^component counts ok" "
+CREATE LOCAL TEMP TABLE comp1 ON COMMIT PRESERVE ROWS AS
+SELECT vgraph.gcomponents(NULL::INT, $REST_AFTER_START USING PARAMETERS graph='vgtest'$CD, threads=1) OVER() FROM dual;
+SELECT CASE WHEN d.n = 0 AND c.n > 0 THEN 'component counts ok' ELSE 'component counts WRONG: ' || d.n || ' differences, ' || c.n || ' components' END
+FROM (SELECT COUNT(*) AS n FROM (
+        (SELECT component, nodes FROM (SELECT vgraph.gcomponents_count(NULL::INT, $REST_AFTER_START USING PARAMETERS graph='vgtest'$CD) OVER() FROM dual) a
+         EXCEPT SELECT component, COUNT(*) FROM comp1 GROUP BY 1)
+        UNION ALL
+        (SELECT component, COUNT(*) FROM comp1 GROUP BY 1
+         EXCEPT SELECT component, nodes FROM (SELECT vgraph.gcomponents_count(NULL::INT, $REST_AFTER_START USING PARAMETERS graph='vgtest'$CD) OVER() FROM dual) b)) u) d
+CROSS JOIN (SELECT COUNT(DISTINCT component) AS n FROM comp1) c;"
+
+expect "gpagerank top=5: the five highest ranks of the full result; threads do not change a rank" "^top ok" "
+CREATE LOCAL TEMP TABLE pr1 ON COMMIT PRESERVE ROWS AS
+SELECT vgraph.gpagerank(NULL::INT, $REST_AFTER_START USING PARAMETERS graph='vgtest'$CD, iterations=10, threads=1) OVER() FROM dual;
+SELECT CASE WHEN t.n = 5 AND t.matching = 5 AND t.lowest >= f.sixth THEN 'top ok' ELSE 'top WRONG: ' || t.n || ' rows, ' || t.matching || ' equal to the full result' END
+FROM (SELECT COUNT(*) AS n, COUNT(p.node) AS matching, MIN(r.rank) AS lowest
+      FROM (SELECT vgraph.gpagerank(NULL::INT, $REST_AFTER_START USING PARAMETERS graph='vgtest'$CD, iterations=10, top=5) OVER() FROM dual) r
+      LEFT JOIN pr1 p ON p.node = r.node AND p.rank = r.rank) t
+CROSS JOIN (SELECT MIN(rank) AS sixth FROM (SELECT rank FROM pr1 ORDER BY rank DESC LIMIT 6) s) f;"
+
 echo "== cache rules"
 expect "session parameter cache_dir is used" "no snapshot cache for graph 'vgtest' in /tmp/vgraph_not_there" "
 ALTER SESSION SET UDPARAMETER FOR vgraph cache_dir = '/tmp/vgraph_not_there';

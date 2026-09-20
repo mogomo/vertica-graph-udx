@@ -30,7 +30,7 @@ TEST_BIN   := $(patsubst tests/engine/%.cpp,$(BUILD_DIR)/tests/%,$(TEST_SRC))
 # Reported by gversion().
 BUILD_FLAGS := $(OPT) -std=c++17 $(shell uname -m) $(notdir $(CXX))-$(shell $(CXX) -dumpfullversion 2>/dev/null || $(CXX) -dumpversion)
 
-COMMON_FLAGS := -std=c++17 -g $(OPT) -Wall -DVGRAPH_BUILD_FLAGS='"$(BUILD_FLAGS)"'
+COMMON_FLAGS := -std=c++17 -g $(OPT) -Wall -pthread -DVGRAPH_BUILD_FLAGS='"$(BUILD_FLAGS)"'
 UDX_FLAGS    := $(COMMON_FLAGS) -I $(SDK_HOME)/include -Wno-unused-value -shared -fPIC \
                 -D_GLIBCXX_USE_CXX11_ABI=$(VERTICA_CXX11_ABI)
 

@@ -1,5 +1,6 @@
 // BFS k-hop, shortest path, components, PageRank: hand-made graphs and a
 // randomised comparison against naive implementations.
+#define VGRAPH_PARALLEL_BLOCK 5      // tiny blocks: the small test graphs are spread over several threads
 #include "check.h"
 
 #include "../../src/engine/bfs.h"
@@ -184,6 +185,13 @@ static void randomised(std::uint64_t seed, std::int64_t nodes, std::int64_t edge
             CHECK(static_cast<std::int64_t>(p.size()) == dist.at(target) + 1);
             CHECK(p.front() == start && p.back() == target);
             for (std::size_t i = 1; i < p.size(); ++i) CHECK(nv.nbrs(p[i - 1], dir).count(p[i]) == 1);
+            po.max_depth = dist.at(target);     // exactly enough
+            CHECK(run_path(t, start, target, po, ps).size() == p.size());
+            if (dist.at(target) > 1) {          // 0 means no limit
+                po.max_depth = dist.at(target) - 1;
+                CHECK(run_path(t, start, target, po, ps).empty());
+            }
+            po.max_depth = 0;
             po.weighted = true;                 // all weights 1: same length
             CHECK(run_path(t, start, target, po, ps).size() == p.size());
         }
@@ -198,15 +206,46 @@ static void randomised(std::uint64_t seed, std::int64_t nodes, std::int64_t edge
         CHECK(g.id_of(comp[t.pos(id)]) == dist.begin()->first);    // smallest id reachable
     }
 
-    std::vector<double> rank;
+    std::vector<pos_t> comp4;
+    connected_components(g, comp4, 4);
+    CHECK(comp4 == comp);                       // threads do not change the result
+
+    std::vector<double> rank, rank4;
     pagerank(g, 20, 0.85, rank);
+    pagerank(g, 20, 0.85, rank4, 4);
+    CHECK(rank4 == rank);                       // bit for bit
     const std::map<std::int64_t, double> expect = naive_pagerank(nv, 20, 0.85);
     for (pos_t p = 0; p < g.node_count(); ++p) CHECK(std::fabs(rank[p] - expect.at(g.id_of(p))) < 1e-12);
+}
+
+// A long chain: the search visits every node, so its links outgrow the hash table and move
+// into an array on the way (see LinkStore in path.h). Then a small search on the same scratch.
+static void long_chain()
+{
+    const std::int64_t n = 40000;
+    std::vector<Edge> list;
+    for (std::int64_t i = 0; i + 1 < n; ++i) list.push_back(Edge(i * 3, (i + 1) * 3));
+    TestGraph t;
+    build(t, list, true);
+    PathScratch ps;
+    PathOptions po;
+    for (int round = 0; round < 2; ++round) {
+        po.weighted = (round == 1);
+        std::vector<std::int64_t> p = run_path(t, 0, (n - 1) * 3, po, ps);
+        CHECK(static_cast<std::int64_t>(p.size()) == n);
+        for (std::size_t i = 0; i < p.size(); ++i) CHECK(p[i] == static_cast<std::int64_t>(i) * 3);
+        CHECK(run_path(t, (n - 1) * 3, 0, po, ps).empty());          // against the direction
+        CHECK(run_path(t, 300, 330, po, ps).size() == 11);
+    }
+    po.weighted = false;
+    po.direction = Direction::Both;
+    CHECK(static_cast<std::int64_t>(run_path(t, (n - 1) * 3, 0, po, ps).size()) == n);
 }
 
 int main()
 {
     hand_made();
+    long_chain();
     randomised(1, 50, 60, true);        // sparse, many components
     randomised(2, 50, 400, true);       // dense
     randomised(3, 300, 900, false);     // undirected

@@ -160,6 +160,17 @@ inline void add_common_query_parameters(Vertica::SizedColumnTypes &parameterType
     parameterTypes.addVarchar(1024, "cache_dir");
 }
 
+// threads: worker threads of the whole-graph algorithms. Default 4, 1 switches them off.
+// They run outside Vertica's resource pools and end before the function returns.
+inline int read_threads(const char *fn, Vertica::ServerInterface &srvInterface)
+{
+    Vertica::ParamReader params = srvInterface.getParamReader();
+    Vertica::vint threads = 4;
+    if (params.containsParameter("threads")) threads = params.getIntRef("threads");
+    if (threads < 1 || threads > 64) vt_report_error(0, "%s: threads must be between 1 and 64", fn);
+    return static_cast<int>(threads);
+}
+
 } // namespace vgraph_udx
 
 #endif

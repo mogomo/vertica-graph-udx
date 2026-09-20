@@ -19,26 +19,30 @@ struct KhopOptions {
 };
 
 // Working memory, reused between searches so that a small search on a large
-// graph does not pay for clearing N entries.
+// graph does not pay for clearing N entries. One bit per node: clearing the whole set is cheap
+// (2 MB for 16 million nodes), and a large search stays in the processor cache for longer.
 class BfsScratch {
 public:
     void prepare(pos_t node_count) {
-        if (seen_.size() < node_count) seen_.resize(node_count, 0);
+        const std::size_t words = (static_cast<std::size_t>(node_count) + 63) / 64;
+        if (seen_.size() < words) seen_.resize(words, 0);
     }
     bool mark(pos_t p) {
-        if (seen_[p]) return false;
-        seen_[p] = 1;
+        std::uint64_t &word = seen_[p >> 6];
+        const std::uint64_t bit = std::uint64_t(1) << (p & 63);
+        if (word & bit) return false;
+        word |= bit;
         touched_.push_back(p);
         return true;
     }
     void reset() {
-        if (touched_.size() > seen_.size() / 16) std::fill(seen_.begin(), seen_.end(), 0);
-        else for (pos_t p : touched_) seen_[p] = 0;
+        if (touched_.size() > seen_.size() / 4) std::fill(seen_.begin(), seen_.end(), 0);
+        else for (pos_t p : touched_) seen_[p >> 6] = 0;
         touched_.clear();
     }
     std::vector<pos_t> frontier, next;
 private:
-    std::vector<std::uint8_t> seen_;
+    std::vector<std::uint64_t> seen_;
     std::vector<pos_t> touched_;
 };
 
