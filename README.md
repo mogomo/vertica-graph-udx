@@ -390,6 +390,10 @@ of the components and PageRank rows only counts (`gds.wcc.stats`,
 Data Science community edition). The results are for this data shape (a random
 contact graph, 3 contacts per person) and this machine; run the script on yours.
 
+With `threads=8` on the 8 cores PageRank takes 1.3 s and components 0.34 s.
+Compiling for the exact processor (`make OPT="-O3 -mcpu=native"`) changed no
+number: the work is random memory access. The portable build is the fast one.
+
 Fenced or unfenced: unfenced saves 2 to 3 ms per call and about 20% on large
 results, and every test of this repository passes in both modes. Unfenced code
 runs inside the Vertica process, so a fault in it can take the node down.
