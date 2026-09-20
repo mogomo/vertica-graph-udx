@@ -35,8 +35,12 @@ CREATE TABLE IF NOT EXISTS vgraph.manifest (
     built_at          TIMESTAMPTZ,
     build_seconds     FLOAT,
     format_version    INT,
-    build_memory_mb   INT DEFAULT 4096        -- above this estimate refresh_graph uses the streaming build
+    build_memory_mb   INT DEFAULT 4096,       -- above this estimate refresh_graph uses the streaming build
+    both_directions   BOOLEAN                 -- TRUE = declared: the table stores every edge in both directions (skips the exact test of the streaming build)
 ) UNSEGMENTED ALL NODES;
+
+-- An install from before this column existed gets it here.
+ALTER TABLE vgraph.manifest ADD COLUMN IF NOT EXISTS both_directions BOOLEAN;
 
 -- Snapshot ids. Never reused, so an old cache file can never pass as a newer snapshot.
 CREATE SEQUENCE IF NOT EXISTS vgraph.snapshot_seq CACHE 1;

@@ -153,7 +153,9 @@ its own memory management:
    undirected graph;
 4. counts; and the test whether the in lists equal the out lists: first an
    order-independent hash sum over (s, d) and (d, s), and only if they are
-   equal the exact anti join;
+   equal the exact anti join. `vgraph.manifest.both_directions = TRUE` declares
+   the answer: the anti join is skipped, the hash sums must still agree or the
+   refresh fails;
 5. one statement per section feeds `gbuild_mapped` with a sorted stream
    (src/engine/section_writer.h). It validates the stream (order, uniqueness,
    ranges, totals) and keeps one 8 MB piece in memory;

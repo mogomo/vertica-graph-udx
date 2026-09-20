@@ -68,16 +68,16 @@ INSERT INTO $SCHEMA.bp_journal (src, dst, del, ts) SELECT src, dst, TRUE, CLOCK_
 INSERT INTO $SCHEMA.bp_journal (src, dst, weight, ts) SELECT src, dst, 9.5, CLOCK_TIMESTAMP() - INTERVAL '12 hours' FROM $SCHEMA.bp_journal WHERE del AND src % 100 = 0;
 COMMIT;" > /dev/null
 
-# check NAME TABLE SRC DST OP WEIGHT DIRECTED VER
+# check NAME TABLE SRC DST OP WEIGHT DIRECTED VER [BOTH_DIRECTIONS]   (TRUE = declared for the streaming build)
 check() {
-    local name="$1" tab="$2" src="$3" dst="$4" op="$5" w="$6" directed="$7" ver="$8"
+    local name="$1" tab="$2" src="$3" dst="$4" op="$5" w="$6" directed="$7" ver="$8" both="${9:-NULL}"
     local out a b
     out=$(run_sql "
 CALL vgraph.unregister_graph('bpmem'); CALL vgraph.unregister_graph('bpmap');
 CALL vgraph.register_graph('bpmem', '$tab', '$src', '$dst', $op, $w, $directed, $ver, NULL);
 CALL vgraph.register_graph('bpmap', '$tab', '$src', '$dst', $op, $w, $directed, $ver, NULL);
 UPDATE vgraph.manifest SET build_memory_mb = 1000000 WHERE graph = 'bpmem';
-UPDATE vgraph.manifest SET build_memory_mb = 0 WHERE graph = 'bpmap';
+UPDATE vgraph.manifest SET build_memory_mb = 0, both_directions = $both WHERE graph = 'bpmap';
 COMMIT;
 CALL vgraph.refresh_graph('bpmem');
 CALL vgraph.refresh_graph('bpmap');
@@ -96,10 +96,25 @@ SELECT 'ids ' || MAX(CASE WHEN graph = 'bpmem' THEN active_snapshot END) || ' ' 
 
 echo "== memory build against streaming build"
 check "directed, both directions stored (no reverse index)" "$SCHEMA.contact"    src_id dst_id NULL    NULL       TRUE  NULL
+check "the same, both directions declared (no exact test)"  "$SCHEMA.contact"    src_id dst_id NULL    NULL       TRUE  NULL TRUE
 check "directed, one direction stored (reverse index)"      "$SCHEMA.bp_plain"   src    dst    NULL    NULL       TRUE  NULL
 check "undirected"                                          "$SCHEMA.bp_plain"   src    dst    NULL    NULL       FALSE NULL
 check "weighted journal with deletes and re-adds"           "$SCHEMA.bp_journal" src    dst    "'del'" "'weight'" TRUE  "'ts'"
 check "the same journal, unweighted"                        "$SCHEMA.bp_journal" src    dst    "'del'" NULL       TRUE  "'ts'"
+
+echo "== a wrong declaration"
+out=$(run_sql "
+CALL vgraph.unregister_graph('bpmap');
+CALL vgraph.register_graph('bpmap', '$SCHEMA.bp_plain', 'src', 'dst', NULL, NULL, TRUE, NULL, NULL);
+UPDATE vgraph.manifest SET build_memory_mb = 0, both_directions = TRUE WHERE graph = 'bpmap'; COMMIT;
+CALL vgraph.refresh_graph('bpmap');
+SELECT 'left ' || COUNT(*) FROM v_catalog.tables WHERE table_schema = 'vgraph' AND table_name ILIKE 'build_bpmap%';")
+if [ "$ECHO_ONLY" = yes ]; then echo "$out"
+elif echo "$out" | grep -q "both_directions is declared" && echo "$out" | grep -q "^left 0$"; then
+    echo "PASS  both directions declared on a one-direction table: refresh fails, build tables removed"
+else
+    echo "FAIL  wrong declaration"; echo "$out" | tail -4 | sed 's/^/      got: /'; FAILED=$((FAILED + 1))
+fi
 
 run_sql "CALL vgraph.unregister_graph('bpmem'); CALL vgraph.unregister_graph('bpmap');
 DROP TABLE IF EXISTS $SCHEMA.bp_plain CASCADE; DROP TABLE IF EXISTS $SCHEMA.bp_journal CASCADE;" > /dev/null

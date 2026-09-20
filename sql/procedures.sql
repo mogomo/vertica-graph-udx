@@ -209,7 +209,7 @@ DECLARE
     cols VARCHAR(1000); source VARCHAR(4000); del_expr VARCHAR(400); del_a VARCHAR(400); del_k VARCHAR(400);
     t0 TIMESTAMPTZ; cut TIMESTAMPTZ; secs FLOAT; nodes INT; edges INT; fmt INT;
     budget INT; est_rows INT; est_mb INT; how VARCHAR(16); t_map VARCHAR(200); t_edges VARCHAR(200);
-    pair VARCHAR(200); stmt VARCHAR(8000); flags VARCHAR(1000); head VARCHAR(1000); n_nodes INT; n_edges INT; n INT; same BOOLEAN;
+    pair VARCHAR(200); stmt VARCHAR(8000); flags VARCHAR(1000); head VARCHAR(1000); n_nodes INT; n_edges INT; n INT; same BOOLEAN; declared BOOLEAN;
 BEGIN
     tab := (SELECT MAX(edge_table) FROM vgraph.manifest WHERE graph = g);
     IF tab IS NULL THEN
@@ -223,6 +223,7 @@ BEGIN
     dir := (SELECT directed FROM vgraph.manifest WHERE graph = g);
     margin := (SELECT ver_margin FROM vgraph.manifest WHERE graph = g);
     prev := (SELECT active_snapshot FROM vgraph.manifest WHERE graph = g);
+    declared := (SELECT both_directions FROM vgraph.manifest WHERE graph = g);
 
     IF prev IS NOT NULL THEN
         PERFORM CALL vgraph.status(g);      -- reports a slow or large delta before it is folded into the new snapshot
@@ -351,10 +352,19 @@ BEGIN
 
         -- d. Does the table store both directions of every edge? Then no reverse CSR is needed.
         --    Cheap test first (order-independent hash sums), exact test only if that one says yes.
+        --    The exact test is an anti join of the edges with themselves: minutes at a billion edges.
+        --    vgraph.manifest.both_directions = TRUE declares the answer and skips it. The cheap test
+        --    still runs: a wrong declaration would give wrong results for direction 'in'.
         same := FALSE;
         IF dir AND n_edges > 0 THEN
-            same := EXECUTE 'SELECT SUM(HASH(s, d) % 1000000007) = SUM(HASH(d, s) % 1000000007) FROM ' || t_edges;
-            IF same THEN
+            pair := CASE WHEN w IS NOT NULL THEN ', weight' ELSE '' END;
+            same := EXECUTE 'SELECT SUM(HASH(s, d' || pair || ') % 1000000007) = SUM(HASH(d, s' || pair || ') % 1000000007) FROM ' || t_edges;
+            IF COALESCE(declared, FALSE) AND NOT same THEN
+                EXECUTE 'DROP TABLE IF EXISTS ' || t_map || ' CASCADE';
+                EXECUTE 'DROP TABLE IF EXISTS ' || t_edges || ' CASCADE';
+                RAISE EXCEPTION 'vgraph.refresh_graph: graph %: both_directions is declared, but table % does not store every edge in both directions', g, tab;
+            END IF;
+            IF same AND NOT COALESCE(declared, FALSE) THEN
                 n := EXECUTE 'SELECT COUNT(*) FROM ' || t_edges || ' a LEFT JOIN ' || t_edges || ' b ON b.s = a.d AND b.d = a.s'
                   || CASE WHEN w IS NOT NULL THEN ' AND b.weight = a.weight' ELSE '' END || ' WHERE b.s IS NULL';
                 same := (n = 0);

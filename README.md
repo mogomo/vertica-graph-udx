@@ -179,6 +179,22 @@ The choice is automatic: rows x 24 bytes is compared with
     UPDATE vgraph.manifest SET build_memory_mb = 0     WHERE graph = 'contacts';   -- always stream
     COMMIT;
 
+**Tables that store both directions.** Many contact tables store a contact
+a-b twice, as the rows (a, b) and (b, a). The snapshot then needs no reverse
+index and is about half the size: the "in" lists equal the "out" lists. Both
+builds find this out by themselves. For the streaming build the proof is a join
+of all edges with themselves, which takes minutes at a billion rows. If you
+know your table, declare it and the join is skipped:
+
+    UPDATE vgraph.manifest SET both_directions = TRUE WHERE graph = 'contacts'; COMMIT;
+    -- or: scripts/register.sh ... --both_directions
+
+A cheap test (one scan, order-independent hash sums) still runs at every
+refresh. If the declaration is wrong, `refresh_graph` fails with a clear
+message and the previous snapshot stays active. This is not the `directed`
+parameter: `directed = false` is for tables that store a contact once, and the
+build adds the reverse rows itself.
+
 The streaming build creates and drops the tables `vgraph.build_<graph>_map`
 and `vgraph.build_<graph>_edges`. It needs disk space for one copy of the
 consolidated edges and for Vertica's sort.
@@ -356,7 +372,7 @@ the tables, recreate the projection).
 ## Scripts
 
     scripts/demo.sh                        # small end-to-end demo, needs nothing else, cleans up after itself
-    scripts/register.sh --graph=contacts --table=app.contacts --src=src --dst=dst --op=del --ver=ts
+    scripts/register.sh --graph=contacts --table=app.contacts --src=src --dst=dst --op=del --ver=ts [--both_directions]
     scripts/refresh.sh --graph=contacts    # also: --load_only, --status, --schedule='0 * * * *'
     scripts/benchmark.sh --rows=100000000 --streaming      # prints a results table; needs the demo repository
 
