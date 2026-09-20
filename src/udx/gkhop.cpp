@@ -2,9 +2,12 @@
 // gkhop_count: same search, but only the number of nodes per hop count.
 //              Output (start, hops, nodes). A deep search finds millions of nodes;
 //              returning them costs more than finding them.
-// Thin adapter around src/engine/bfs.h. Input handling is in udx_common.h.
+// Thin adapter around src/engine/bfs.h and bfs_parallel.h (several threads; small searches stay on
+// one). max_results uses the single-threaded search: which nodes come first must not depend on threads.
+// Input handling is in udx_common.h.
 #include "udx_common.h"
 #include "../engine/bfs.h"
+#include "../engine/bfs_parallel.h"
 
 #include <vector>
 
@@ -18,6 +21,7 @@ class GKhop : public TransformFunction
 protected:
     vgraph::KhopOptions opt_;
     bool count_only_ = false;
+    int threads_ = 1;
 
     virtual void setup(ServerInterface &srvInterface, const SizedColumnTypes &argTypes)
     {
@@ -33,6 +37,7 @@ protected:
             opt_.max_results = params.getIntRef("max_results");
             if (opt_.max_results < 0) vt_report_error(0, "%s: max_results must be 0 or more", FN);
         }
+        threads_ = read_threads(FN, srvInterface);
     }
 
     // One row per node found. Kept small and separate from count_rows: this loop writes millions
@@ -42,6 +47,7 @@ protected:
     {
         static const size_t BATCH = 4096;
         vgraph::BfsScratch scratch;
+        vgraph::ParallelBfsScratch pscratch;
         std::vector<vgraph::pos_t> batch;
         batch.reserve(BATCH);
         for (const Request &r : requests) {
@@ -55,6 +61,22 @@ protected:
                     outputWriter.setInt(2, 0);
                     outputWriter.next();
                 }
+                continue;
+            }
+            if (opt_.max_results == 0) {
+                // level by level on several threads; the rows of a level are written here
+                vgraph::khop_parallel(graph, start_pos, opt_, pscratch, threads_, true,
+                    [&](std::int64_t hops, std::int64_t, const std::vector<std::vector<vgraph::pos_t>> *lists) {
+                        for (const auto &list : *lists) {
+                            for (vgraph::pos_t p : list) {
+                                outputWriter.setInt(0, start);
+                                outputWriter.setInt(1, graph.id_of(p));
+                                outputWriter.setInt(2, hops);
+                                outputWriter.next();
+                            }
+                        }
+                    });
+                if (isCanceled()) return;
                 continue;
             }
             // The search fills a small batch; the rows are written in a tight loop of their own.
@@ -86,12 +108,19 @@ protected:
     void count_rows(const G &graph, const std::vector<Request> &requests, PartitionWriter &outputWriter)
     {
         vgraph::BfsScratch scratch;
+        vgraph::ParallelBfsScratch pscratch;
         std::vector<vint> per_hop;
         for (const Request &r : requests) {
             vgraph::pos_t start_pos;
             per_hop.assign(1, 0);
             if (!graph.find(r.start, start_pos)) {
                 if (!opt_.exact || opt_.depth == 0) per_hop[0] = 1;     // an unknown node reaches itself
+            } else if (opt_.max_results == 0) {
+                vgraph::khop_parallel(graph, start_pos, opt_, pscratch, threads_, false,
+                    [&](std::int64_t hops, std::int64_t count, const std::vector<std::vector<vgraph::pos_t>> *) {
+                        if ((size_t)hops >= per_hop.size()) per_hop.resize(hops + 1, 0);
+                        per_hop[hops] += count;
+                    });
             } else {
                 vgraph::khop(graph, start_pos, opt_, scratch, [&](vgraph::pos_t, std::int64_t hops) {
                     if ((size_t)hops >= per_hop.size()) per_hop.resize(hops + 1, 0);
@@ -166,6 +195,7 @@ protected:
         parameterTypes.addVarchar(8, "direction");
         parameterTypes.addInt("max_results");
         parameterTypes.addInt("start");
+        parameterTypes.addInt("threads");
     }
 
     virtual TransformFunction *createTransformFunction(ServerInterface &srvInterface)

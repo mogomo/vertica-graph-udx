@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace vgraph_udx {
@@ -160,12 +161,15 @@ inline void add_common_query_parameters(Vertica::SizedColumnTypes &parameterType
     parameterTypes.addVarchar(1024, "cache_dir");
 }
 
-// threads: worker threads of the whole-graph algorithms. Default 4, 1 switches them off.
+// threads: worker threads of gkhop, gkhop_count, gcomponents and gpagerank. Default: one per core
+// of the node (at most 64); 1 switches them off. Small searches never start a thread.
 // They run outside Vertica's resource pools and end before the function returns.
 inline int read_threads(const char *fn, Vertica::ServerInterface &srvInterface)
 {
     Vertica::ParamReader params = srvInterface.getParamReader();
-    Vertica::vint threads = 4;
+    Vertica::vint threads = std::thread::hardware_concurrency();
+    if (threads < 1) threads = 1;
+    if (threads > 64) threads = 64;
     if (params.containsParameter("threads")) threads = params.getIntRef("threads");
     if (threads < 1 || threads > 64) vt_report_error(0, "%s: threads must be between 1 and 64", fn);
     return static_cast<int>(threads);
