@@ -16,6 +16,7 @@ Works on single-node and multi-node databases (tested: one node on aarch64,
 | `vgraph.gkhop_count`        | the same search, returns only the number of nodes per hop count |
 | `vgraph.gpath`              | shortest path, by hops or by weight |
 | `vgraph.gcomponents`        | connected components |
+| `vgraph.gcomponents_count`  | the same, returns one row per component with its size |
 | `vgraph.gpagerank`          | PageRank |
 | `vgraph.register_graph`     | register an edge table as a graph |
 | `vgraph.refresh_graph`      | rebuild the snapshot and load it on every node |
@@ -228,7 +229,7 @@ All query functions take the eight columns of the delta view:
                               USING PARAMETERS graph='contacts') OVER() FROM app.contacts_delta;
 
     SELECT vgraph.gpagerank(start, target, src, dst, del, weight, ver, snapshot_id
-                            USING PARAMETERS graph='contacts', iterations=20, damping=0.85) OVER()
+                            USING PARAMETERS graph='contacts', iterations=20, damping=0.85, top=100) OVER()
     FROM app.contacts_delta;
 
 - `gkhop` returns `(start, node, hops)`. Each node appears once, at its
@@ -242,8 +243,14 @@ All query functions take the eight columns of the delta view:
   `weighted` (Dijkstra; weights must not be negative; `max_depth` is ignored),
   `start` and `target`.
 - `gcomponents` returns `(node, component)`. `component` is the smallest node
-  id in it. Direction is ignored.
-- `gpagerank` returns `(node, rank)`. Ranks sum to 1.
+  id in it. Direction is ignored. `gcomponents_count` returns `(component,
+  nodes)`, one row per component.
+- `gpagerank` returns `(node, rank)`. Ranks sum to 1 over the whole graph.
+  `top=N` returns only the N highest ranks.
+- `gcomponents`, `gcomponents_count` and `gpagerank` use worker threads:
+  `threads` (default 4, 1 to 64; 1 switches them off). The result does not
+  depend on the number of threads. The threads run outside Vertica's resource
+  pools and end before the function returns.
 
 ### Large results
 
@@ -256,6 +263,8 @@ moving them. If you need numbers and not the nodes, ask for the counts:
 
 It takes the same parameters as `gkhop`. On the 100 million row test it
 answers in 0.25 s where `gkhop` needs 0.95 s to return 5.8 million rows.
+The same holds for whole-graph results: `gcomponents_count` and
+`gpagerank ... top=N` return the answer, not one row per node.
 
 If you need the nodes, keep them in the database and join there:
 
@@ -328,12 +337,15 @@ in-memory estimate is 24 GB, the default budget 4 GB).
 | Step, 1 billion rows                                         | Time |
 |--------------------------------------------------------------|-----:|
 | load the 1 billion rows into Vertica (the demo generator)    | 116 s |
-| `refresh_graph`: streaming build, load, 6.67 GB snapshot file | 17.9 min |
+| `refresh_graph`: streaming build, load, 6.67 GB snapshot file | 17.9 min; 10.8 min with `both_directions` declared |
 | gkhop_count depth 9 from person 1 (3.68 million people)      | 0.37 to 0.45 s |
 | gkhop depth 9, all 3.68 million nodes returned               | 1.0 s |
-| gkhop depth 2 (41 people) / depth 3 (240 people)             | 13 ms / 9 ms |
+| gkhop depth 2 (41 people) / depth 3 (240 people)             | 13 ms / 9 ms; depth 2 now 5 ms fenced, 3 ms unfenced |
 | gkhop_count depth 12 (159.6 million people, nearly everyone) | 15.1 s |
 | SQL BFS procedure, 9 hops, same result                       | 16.8 s (11.9 s in the generator's own run) |
+| gpath between two people, 11 hops (fenced / unfenced)        | 37 ms / 34 ms |
+| gcomponents_count, the whole graph, 4 threads                | 5.9 s / 5.2 s |
+| gpagerank, 20 iterations, top 10, 4 threads                  | 25.4 s / 24.9 s |
 
 During the whole run the machine did not swap; the build function itself holds
 8 MB. The first query after the load was as fast as the later ones, because
@@ -341,9 +353,47 @@ the load had just written the file and it was still in the page cache.
 
 Memory: queries map the snapshot file read-only. All concurrent queries share
 one copy in the operating system's page cache, and the file may be larger than
-free memory. Private memory per query: gkhop 1 byte per node, gpath 4,
-gcomponents 8, gpagerank 24. The in-memory build holds about 16 bytes per edge
+free memory. Private memory per query: gkhop 1 bit per node; gpath a small
+hash table (8 bytes per node only when a search visits a large part of the
+graph); gcomponents 12 bytes per node; gpagerank 32. The in-memory build holds about 16 bytes per edge
 plus 32 per node in the UDx process; the streaming build holds 8 MB.
+
+### Compared with Neo4j
+
+The same questions on the same data, on the same machine (environment A, 35 GB
+RAM): 100 million contact rows, 16.7 million people. Neo4j 5.26 Community with
+APOC and Graph Data Science 2.13, 8 GB heap, 8 GB page cache, imported with
+`neo4j-admin database import`. Neo4j stores every contact once and is asked
+without a direction; Vertica stores both directions. Server times on both
+sides, best of three runs. **Both systems returned the same result for every
+question**; `scripts/neo4j_compare.sh` checks that and repeats the whole test.
+
+| 100 million rows | vgraph unfenced | vgraph fenced | Neo4j |
+|---|---:|---:|---:|
+| people within 2 hops (55)                     | 3 ms   | 5 ms   | 1 ms |
+| people within 3 hops (289)                    | 2 ms   | 6 ms   | 3 ms |
+| people within 6 hops (44,846)                 | 11 ms  | 14 ms  | 21 ms (13 ms as a Cypher pattern) |
+| people within 9 hops (5.8 million)            | 0.24 s | 0.33 s | 5.1 s with APOC, 3.6 s as a Cypher pattern |
+| shortest path, 12 hops                        | 13 ms  | 16 ms  | 13 ms |
+| connected components, counted                 | 0.41 s | 0.41 s | 0.66 s, after a 5.6 s projection |
+| PageRank, 20 iterations                       | 2.1 s  | 2.6 s  | 18.4 s, after the same projection |
+| load the data                                 | 16 s   |        | 9 s CSV export, 24 s import, 2 s index |
+| prepare for graph queries                     | 22 s (`refresh_graph`) | | 5.6 s projection for the algorithms, again after every restart |
+| size on disk                                  | table 444 MB + snapshot 667 MB | | 3.2 GB |
+
+What the numbers say. A small question costs 2 to 5 ms here and 1 to 3 ms in
+Neo4j: a Vertica statement has a floor of 1 to 3 ms even for `SELECT COUNT(*)`
+of a one-row table. Everything larger is faster here, up to 20 times for deep
+neighbourhoods. The vgraph side returns rows that SQL can join; the Neo4j side
+of the components and PageRank rows only counts (`gds.wcc.stats`,
+`gds.pageRank.stats`). Both sides use 4 threads there (the limit of the Graph
+Data Science community edition). The results are for this data shape (a random
+contact graph, 3 contacts per person) and this machine; run the script on yours.
+
+Fenced or unfenced: unfenced saves 2 to 3 ms per call and about 20% on large
+results, and every test of this repository passes in both modes. Unfenced code
+runs inside the Vertica process, so a fault in it can take the node down.
+`make deploy` installs fenced; `make deploy FENCED=no` installs unfenced.
 
 ## Possible later: a changes table
 
@@ -375,8 +425,20 @@ the tables, recreate the projection).
     scripts/register.sh --graph=contacts --table=app.contacts --src=src --dst=dst --op=del --ver=ts [--both_directions]
     scripts/refresh.sh --graph=contacts    # also: --load_only, --status, --schedule='0 * * * *'
     scripts/benchmark.sh --rows=100000000 --streaming      # prints a results table; needs the demo repository
+    scripts/neo4j_compare.sh --neo4j_home=DIR              # the same questions on Neo4j, results compared
 
 All of them accept `--echo_only` and `--help`.
+
+## Notebook
+
+[notebook/vgraph_demo.ipynb](notebook/vgraph_demo.ipynb) is a walk through a use
+case, with pictures: following the money of a flagged account in a payments
+network. It uses `gkhop`, `gpath`, `gcomponents_count`, `gpagerank`, feeds graph
+features to an isolation forest through VerticaPy, shows a change that is seen
+without a refresh, and charts the measurements of this page. It creates its own
+data (schema `VGRAPH_NB`, graph `nb`). It needs Python with `verticapy`,
+`vertica-python`, `networkx`, `matplotlib`, `pandas` and `jupyterlab`, and reads
+the connection from the same `VSQL_*` environment variables as the scripts.
 
 ## Tests
 
@@ -395,7 +457,8 @@ cloned as a sibling directory. They drop and recreate schema `GRAPH_DEMO`
 
 - More than 2^32 - 2 nodes in one graph.
 - Node ids other than Vertica INT.
-- Parallel execution of one query over several nodes: a query runs on the node that started it.
+- Parallel execution of one query over several nodes: a query runs on the node that started it
+  (gpagerank and gcomponents use several threads on that node).
 - Two refreshes of the same graph at the same time.
 - Ties: two rows for the same edge with the same version have no defined order.
 - Big-endian hosts.
