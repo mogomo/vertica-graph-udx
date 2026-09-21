@@ -3,6 +3,8 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <map>
+#include <mutex>
 #include <stdexcept>
 
 #include <dirent.h>
@@ -107,9 +109,31 @@ std::vector<std::string> list_cached_graphs(const std::string &cache_dir)
 
 // ---- MappedSnapshot
 
+namespace {
+
+// The mappings kept by open_active, by file path. An entry is used only while the file at that
+// path is still the file that was mapped.
+struct KeptMapping {
+    void *map = nullptr;
+    std::uint64_t size = 0;
+    std::uint64_t dev = 0, ino = 0;
+    Csr csr;
+    ~KeptMapping() { if (map) munmap(map, size); }
+    bool is_file(const std::string &path) const {
+        struct stat st;
+        return stat(path.c_str(), &st) == 0 && static_cast<std::uint64_t>(st.st_dev) == dev &&
+               static_cast<std::uint64_t>(st.st_ino) == ino &&
+               static_cast<std::uint64_t>(st.st_size) == size;
+    }
+};
+std::mutex kept_lock;
+std::map<std::string, std::shared_ptr<KeptMapping>> kept_mappings;
+
+} // namespace
+
 MappedSnapshot::~MappedSnapshot()
 {
-    if (map_) munmap(map_, size_);
+    if (map_ && !kept_) munmap(map_, size_);
 }
 
 void MappedSnapshot::open(const std::string &path, bool verify_checksum)
@@ -122,9 +146,12 @@ void MappedSnapshot::open(const std::string &path, bool verify_checksum)
     void *m = mmap(nullptr, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
     ::close(fd);
     if (m == MAP_FAILED) fail("cannot mmap", path);
-    if (map_) munmap(map_, size_);
+    if (map_ && !kept_) munmap(map_, size_);
+    kept_.reset();
     map_ = m;
     size_ = st.st_size;
+    dev_ = st.st_dev;
+    ino_ = st.st_ino;
     path_ = path;
     try {
         csr_ = snapshot_open(static_cast<const std::uint8_t *>(map_), size_, verify_checksum);
@@ -138,11 +165,33 @@ void MappedSnapshot::open_active(const std::string &cache_dir, const std::string
     std::int64_t id = 0;
     if (!read_active(cache_dir, graph, id))
         throw std::runtime_error("no snapshot cache for graph '" + graph + "' in " + cache_dir + ": run gload");
-    try {
-        open(snapshot_path(cache_dir, graph, id), false);
-    } catch (const std::runtime_error &e) {
-        throw std::runtime_error(std::string("snapshot cache of graph '") + graph + "' is missing or damaged (" +
-                                 e.what() + "): run gload");
+    const std::string path = snapshot_path(cache_dir, graph, id);
+    const std::string dir = path.substr(0, path.rfind('/') + 1);
+    std::lock_guard<std::mutex> hold(kept_lock);
+    for (auto it = kept_mappings.begin(); it != kept_mappings.end(); ) {
+        const bool older = it->first != path && it->first.compare(0, dir.size(), dir) == 0;
+        if (older || !it->second->is_file(it->first)) it = kept_mappings.erase(it);      // unmapped when its last query ends
+        else ++it;
+    }
+    auto it = kept_mappings.find(path);
+    if (it == kept_mappings.end()) {
+        try {
+            open(path, false);
+        } catch (const std::runtime_error &e) {
+            throw std::runtime_error(std::string("snapshot cache of graph '") + graph + "' is missing or damaged (" +
+                                     e.what() + "): run gload");
+        }
+        std::shared_ptr<KeptMapping> keep(new KeptMapping);
+        keep->map = map_; keep->size = size_; keep->dev = dev_; keep->ino = ino_; keep->csr = csr_;
+        kept_ = keep;
+        kept_mappings[path] = keep;
+    } else {
+        if (map_ && !kept_) munmap(map_, size_);
+        kept_ = it->second;
+        map_ = it->second->map;
+        size_ = it->second->size;
+        csr_ = it->second->csr;
+        path_ = path;
     }
     snapshot_id_ = id;
 }

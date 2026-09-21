@@ -8,6 +8,7 @@
 #include "snapshot.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -38,7 +39,10 @@ public:
     MappedSnapshot &operator=(const MappedSnapshot &) = delete;
 
     void open(const std::string &path, bool verify_checksum);
-    // Opens the active snapshot of a graph.
+    // Opens the active snapshot of a graph. The mapping is kept by the process and shared by later
+    // calls: a new mapping of a large file pays a page fault for every page a search touches, which
+    // costs several times the search. A kept mapping is dropped at the next open_active of any
+    // graph when its file is gone or replaced, or when its graph has a newer active snapshot.
     void open_active(const std::string &cache_dir, const std::string &graph);
 
     const Csr &csr() const { return csr_; }
@@ -49,6 +53,8 @@ public:
 private:
     void *map_ = nullptr;
     std::uint64_t size_ = 0;
+    std::uint64_t dev_ = 0, ino_ = 0;     // the file that is mapped
+    std::shared_ptr<void> kept_;          // open_active: the mapping is shared and outlives this object
     std::int64_t snapshot_id_ = 0;
     std::string path_;
     Csr csr_;

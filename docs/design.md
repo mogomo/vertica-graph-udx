@@ -52,6 +52,17 @@ that starts there fails with a clear message, and running gload again repairs it
   magic. It never touches anything else. Graph names are limited to letters,
   digits and underscore, so a name cannot point outside cache_dir.
 - Two gload runs for the same graph at the same time are not supported.
+- The mapping of the active file is kept by the process and shared by later
+  calls. Reason, measured at one billion rows: a new mapping pays a page fault
+  for every page a search touches, 34,000 faults for one 13-hop path. The
+  search took 8 ms, the faults 50 ms. A kept mapping is dropped at the next
+  vgraph query of that process when its file is gone or replaced, or when its
+  graph has a newer active snapshot; a query that still runs on it finishes
+  first. Consequences: unfenced, the mapping lives in the Vertica process
+  (address space only: the pages belong to the file cache of the operating
+  system, not to Vertica). Fenced, the process ends with the session, so the
+  first call of a session pays the faults. A removed cache file keeps its disk
+  space until the process that mapped it runs its next vgraph query or ends.
 - Directories are created with mode 0700, files with 0600.
 
 ## Memory
@@ -65,8 +76,8 @@ In fenced mode this memory belongs to the fenced process. The limit is the
 configuration parameter `FencedUDxMemoryLimitMB` (-1 = no limit).
 
 Query functions mmap the snapshot and copy nothing. Working memory per call:
-gkhop 1 byte per node plus the frontier; gpath 4 bytes per node (12 with
-weights); gcomponents 4 bytes per node; gpagerank 24 bytes per node.
+gkhop 1 byte per node plus the frontier; gpath 8 bytes per visited node, or 4
+bytes per node when the search grows large (12 with weights); gcomponents 4 bytes per node; gpagerank 24 bytes per node.
 
 ## Freshness: exact results between refreshes
 
@@ -175,5 +186,5 @@ memory, 82 s streaming, identical 667 MB file.
 
 - Without the `graph` parameter a query function builds the graph from its
   input rows; deleted edges are not accepted there.
-- gpath with `weighted=true` ignores `max_depth`.
+- gpath with `weighted=true` ignores `max_depth` and runs on one thread.
 - All query functions run with `OVER()`: one instance, one node.
