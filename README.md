@@ -621,3 +621,23 @@ More detail: [docs/design.md](docs/design.md), [docs/format.md](docs/format.md).
 ## License
 
 MIT. Author: Mo (github.com/mogomo).
+
+## Disclaimer
+
+This repository is a demo. It is not a product of, and is not endorsed or
+supported by, Rocket Software, Vertica, Neo4j or any other company.
+
+The software and everything in this repository, including the measurements, are
+provided "as is", without warranty of any kind, as the MIT license says, and the
+author cannot take responsibility for how it is used. Please try it on your own
+systems and data before you rely on it, and take special care with unfenced
+mode, where the code runs inside the Vertica process.
+
+The benchmark results describe one data shape, on one machine, with the software
+versions and settings named above. They are not a statement about any product
+in general, and your results will differ. The scripts are included so that you
+can repeat every measurement yourself.
+
+Vertica, Rocket Software, Neo4j, APOC, Graph Data Science, Cypher and all other
+product and company names are trademarks or registered trademarks of their
+respective owners. They are used here only to identify the products.

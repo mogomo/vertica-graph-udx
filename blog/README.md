@@ -351,3 +351,16 @@ For the billion-row run, give Neo4j the memory it needs for the question you
 care about:
 
     scripts/neo4j_compare.sh --neo4j_home=DIR --rows=1000000000 --heap=6g --pagecache=22g
+
+## A note on this article
+
+This is a demo. It is not a product of, and is not endorsed or supported by,
+Rocket Software, Vertica, Neo4j or any other company, and it is shared "as is",
+without warranty, under the MIT license. The numbers describe one data shape on
+one machine; they are not a statement about any product in general, and yours
+will differ, which is why the scripts are there. Neo4j is a fine graph database,
+and measuring next to it made this work better twice.
+
+Vertica, Rocket Software, Neo4j, APOC, Graph Data Science, Cypher and all other
+product and company names are trademarks of their respective owners, used here
+with respect and only to identify the products.
