@@ -262,8 +262,28 @@ in a log file, never as a time.
 
 The script owns that Neo4j installation: it replaces its database, writes its
 configuration (localhost only) and stops the server at the end. It uses schema
-`VGNEO`, needs about 1.5 GB for the exported CSV files per 100 million rows,
-and takes about 25 minutes.
+`VGNEO` and the graph name `vgneo` (`--schema=NAME --graph=NAME --work=DIR`
+keep a second size next to the first), needs about 1.5 GB for the exported CSV
+files per 100 million rows, and takes about 25 minutes.
+
+### Run the notebook
+
+The notebook runs on any computer that can reach the database; the library must
+be installed there first (`make deploy`, above). It needs Python 3.9 or later:
+
+    python3 -m venv .venv
+    .venv/bin/pip install jupyterlab vertica-python networkx matplotlib pandas
+    export VSQL_HOST=... VSQL_PORT=5433 VSQL_USER=dbadmin VSQL_PASSWORD=... VSQL_DATABASE=...
+    .venv/bin/python -m jupyterlab notebook/vgraph_demo.ipynb
+
+Then choose Run, Run All Cells. It takes about a minute. What it does in the
+database: it drops and recreates schema `VGRAPH_NB` (50,000 people) and the
+graph `nb`, so the user needs the role `vgraph_admin` or must be the database
+administrator. The side-by-side charts draw the numbers measured by
+`scripts/neo4j_compare.sh`; Neo4j is not needed to run the notebook. The cells
+for one billion rows ask the largest registered graph with more than 500
+million edges; without one they print "skipped". The file in the repository is
+stored with its results, so GitHub shows it without running anything.
 
 ## 5. Use it on your own tables
 
