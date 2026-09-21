@@ -117,9 +117,15 @@ bool shortest_path(const G &g, pos_t start, pos_t target, const PathOptions &opt
 
     if (!found && !opt.weighted) {
         // Two searches, one level at a time: forward from start, backward from target against the
-        // edge direction. The side with the smaller frontier moves. A level is always finished, and
-        // the shortest of the meetings found in it is the answer: a search from one side alone
+        // edge direction. The side with the smaller frontier moves: a search from one side alone
         // visits most of a large graph for a far target, the two half searches visit a fraction.
+        //
+        // The search stops at the first meeting. Every node is tested against the other side when
+        // it is discovered, so a node of the other side that is met now lies in its newest level,
+        // db hops from its end (forward case): a node v at k < db hops was expanded earlier, and
+        // that expansion looked at u. Either u was already visited from this side, a meeting then,
+        // or u joined the other side, a meeting when this side discovered u. So all meetings of a
+        // level have the same length, df + 1 + db, and the first one is a shortest path.
         const Direction back_dir = opt.direction == Direction::Out ? Direction::In
                                  : opt.direction == Direction::In ? Direction::Out : Direction::Both;
         s.back_.set(target, target);
@@ -128,11 +134,6 @@ bool shortest_path(const G &g, pos_t start, pos_t target, const PathOptions &opt
         s.frontier_b.assign(1, target);
         std::int64_t df = 0, db = 0, best = -1;
         pos_t meet_u = NO_POS, meet_v = NO_POS;      // edge meet_u -> meet_v joins the two searches
-        auto chain = [](const LinkStore &link, pos_t p) {
-            std::int64_t n = 0;
-            while (link.get(p) != p) { p = link.get(p); ++n; }
-            return n;
-        };
         while (best < 0 && !s.frontier.empty() && !s.frontier_b.empty() &&
                (opt.max_depth == 0 || df + db < opt.max_depth)) {
             const bool forward = s.frontier.size() <= s.frontier_b.size();
@@ -141,14 +142,13 @@ bool shortest_path(const G &g, pos_t start, pos_t target, const PathOptions &opt
             std::vector<pos_t> &front = forward ? s.frontier : s.frontier_b;
             s.next.clear();
             for (pos_t u : front) {
+                if (best >= 0) break;
                 g.for_dir(u, forward ? opt.direction : back_dir, [&](pos_t v, float) {
+                    if (best >= 0) return;
                     if (other.has(v)) {
-                        const std::int64_t len = (forward ? df : db) + 1 + chain(other, v);
-                        if (best < 0 || len < best) {
-                            best = len;
-                            meet_u = forward ? u : v;
-                            meet_v = forward ? v : u;
-                        }
+                        best = df + db + 1;
+                        meet_u = forward ? u : v;
+                        meet_v = forward ? v : u;
                     } else if (!mine.has(v)) {
                         mine.set(v, u);
                         s.touched_.push_back(v);
