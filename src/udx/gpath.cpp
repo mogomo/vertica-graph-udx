@@ -1,6 +1,7 @@
 // gpath: shortest path from start to target for each request row.
 // Output (start, target, hop_no, node); hop_no 0 is the start node.
 // No rows for a request without a path. Thin adapter around src/engine/path.h.
+// threads: the search by hops uses them for large levels; weighted=true runs on one thread.
 #include "udx_common.h"
 #include "../engine/path.h"
 
@@ -12,6 +13,7 @@ static const char *const FN = "gpath";
 class GPath : public TransformFunction
 {
     vgraph::PathOptions opt_;
+    int threads_ = 1;
 
     virtual void setup(ServerInterface &srvInterface, const SizedColumnTypes &argTypes)
     {
@@ -25,6 +27,7 @@ class GPath : public TransformFunction
         if (params.containsParameter("weighted")) opt_.weighted = params.getBoolRef("weighted") == vbool_true;
         if (params.containsParameter("start") != params.containsParameter("target"))
             vt_report_error(0, "%s: parameters start and target must be given together", FN);
+        threads_ = read_threads(FN, srvInterface);
     }
 
     virtual void processPartition(ServerInterface &srvInterface,
@@ -62,7 +65,7 @@ class GPath : public TransformFunction
                         outputWriter.next();
                         continue;
                     }
-                    vgraph::shortest_path(graph, s, t, opt_, scratch, path);
+                    vgraph::shortest_path(graph, s, t, opt_, scratch, path, threads_);
                     for (size_t i = 0; i < path.size(); ++i) {
                         outputWriter.setInt(0, r.start);
                         outputWriter.setInt(1, r.target);
@@ -104,6 +107,7 @@ class GPathFactory : public TransformFunctionFactory
         parameterTypes.addBool("weighted");
         parameterTypes.addInt("start");
         parameterTypes.addInt("target");
+        parameterTypes.addInt("threads");
     }
 
     virtual TransformFunction *createTransformFunction(ServerInterface &srvInterface)

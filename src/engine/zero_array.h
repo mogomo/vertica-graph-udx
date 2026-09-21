@@ -35,6 +35,16 @@ public:
         data_ = nullptr; size_ = 0;
         ensure(n);
     }
+    // Exactly n zero elements in a fresh block: also makes the array smaller.
+    void renew(std::size_t n) {
+        std::free(data_);
+        data_ = nullptr; size_ = 0;
+        ensure(n);
+    }
+    void swap(ZeroArray &other) {
+        T *d = data_; data_ = other.data_; other.data_ = d;
+        std::size_t n = size_; size_ = other.size_; other.size_ = n;
+    }
     std::size_t size() const { return size_; }
     T &operator[](std::size_t i) { return data_[i]; }
     const T &operator[](std::size_t i) const { return data_[i]; }

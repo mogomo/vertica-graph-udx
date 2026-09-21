@@ -195,6 +195,17 @@ FROM (SELECT COUNT(*) AS n, COUNT(p.node) AS matching, MIN(r.rank) AS lowest
       LEFT JOIN pr1 p ON p.node = r.node AND p.rank = r.rank) t
 CROSS JOIN (SELECT MIN(rank) AS sixth FROM (SELECT rank FROM pr1 ORDER BY rank DESC LIMIT 6) s) f;"
 
+expect "gpath: one thread and four give the same path" "^path threads ok" "
+CREATE LOCAL TEMP TABLE far ON COMMIT PRESERVE ROWS AS
+SELECT node AS target FROM (SELECT vgraph.gkhop(NULL::INT, $REST_AFTER_START USING PARAMETERS graph='vgtest'$CD, depth=64, start=1) OVER() FROM dual) r ORDER BY hops DESC, node LIMIT 1;
+CREATE LOCAL TEMP TABLE path1 ON COMMIT PRESERVE ROWS AS
+SELECT vgraph.gpath(1, f.target, $REST_AFTER_TARGET USING PARAMETERS graph='vgtest'$CD, threads=1) OVER() FROM far f;
+CREATE LOCAL TEMP TABLE path4 ON COMMIT PRESERVE ROWS AS
+SELECT vgraph.gpath(1, f.target, $REST_AFTER_TARGET USING PARAMETERS graph='vgtest'$CD, threads=4) OVER() FROM far f;
+SELECT CASE WHEN d.n = 0 AND c.n > 1 THEN 'path threads ok' ELSE 'path threads WRONG: ' || d.n || ' differences, ' || c.n || ' rows' END
+FROM (SELECT COUNT(*) AS n FROM ((SELECT * FROM path1 EXCEPT SELECT * FROM path4) UNION ALL (SELECT * FROM path4 EXCEPT SELECT * FROM path1)) u) d
+CROSS JOIN (SELECT COUNT(*) AS n FROM path1) c;"
+
 echo "== cache rules"
 expect "session parameter cache_dir is used" "no snapshot cache for graph 'vgtest' in /tmp/vgraph_not_there" "
 ALTER SESSION SET UDPARAMETER FOR vgraph cache_dir = '/tmp/vgraph_not_there';

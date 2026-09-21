@@ -161,7 +161,7 @@ inline void add_common_query_parameters(Vertica::SizedColumnTypes &parameterType
     parameterTypes.addVarchar(1024, "cache_dir");
 }
 
-// threads: worker threads of gkhop, gkhop_count, gcomponents and gpagerank. Default: one per core
+// threads: worker threads of gkhop, gkhop_count, gpath, gcomponents and gpagerank. Default: one per core
 // of the node (at most 64); 1 switches them off. Small searches never start a thread.
 // They run outside Vertica's resource pools and end before the function returns.
 inline int read_threads(const char *fn, Vertica::ServerInterface &srvInterface)

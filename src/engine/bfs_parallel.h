@@ -40,10 +40,6 @@ public:
     std::size_t words_ = 0;
 };
 
-#ifndef VGRAPH_SERIAL_LEVEL
-#define VGRAPH_SERIAL_LEVEL 4096                       // the unit tests use a tiny one
-#endif
-constexpr std::size_t SERIAL_LEVEL = VGRAPH_SERIAL_LEVEL;      // smaller frontiers are expanded on the calling thread
 static_assert(PARALLEL_BLOCK % 64 == 0, "a block must own whole words of the bitmaps");
 
 // on_level(hops, count, lists) is called on the calling thread, once per level that has nodes to
